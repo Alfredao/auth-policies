@@ -753,6 +753,101 @@ if (hasPermission(user, 'create.user')) {
 }
 ```
 
+## Permission Inheritance
+
+Define role hierarchies where higher roles automatically inherit permissions from lower roles:
+
+### Basic Inheritance
+
+```typescript
+const rolePermissions = {
+  VIEWER: ['view.user', 'view.post'],
+  EDITOR: {
+    inherits: 'VIEWER',
+    permissions: ['create.post', 'update.post'],
+  },
+  ADMIN: {
+    inherits: 'EDITOR',
+    permissions: ['delete.post', 'delete.user'],
+  },
+}
+
+// Resolved permissions:
+// VIEWER: ['view.user', 'view.post']
+// EDITOR: ['view.user', 'view.post', 'create.post', 'update.post']
+// ADMIN:  ['view.user', 'view.post', 'create.post', 'update.post', 'delete.post', 'delete.user']
+```
+
+### Multiple Inheritance
+
+Inherit from multiple roles at once:
+
+```typescript
+const rolePermissions = {
+  VIEWER: ['view.dashboard'],
+  BILLING: {
+    inherits: 'VIEWER',
+    permissions: ['view.invoice', 'create.invoice'],
+  },
+  SUPPORT: {
+    inherits: 'VIEWER',
+    permissions: ['view.ticket', 'update.ticket'],
+  },
+  MANAGER: {
+    inherits: ['BILLING', 'SUPPORT'],  // Inherits from both
+    permissions: ['delete.user'],
+  },
+}
+
+// MANAGER gets: view.dashboard, view.invoice, create.invoice, view.ticket, update.ticket, delete.user
+```
+
+### Mixed Syntax
+
+You can mix flat arrays and inheritance in the same configuration:
+
+```typescript
+const rolePermissions = {
+  VIEWER: ['view.user'],  // Flat array
+  ADMIN: {                // With inheritance
+    inherits: 'VIEWER',
+    permissions: ['delete.user'],
+  },
+}
+```
+
+### Circular Inheritance Detection
+
+The library automatically detects and throws an error for circular inheritance:
+
+```typescript
+import { CircularInheritanceError } from '@alfredaoo/auth-policies'
+
+const rolePermissions = {
+  A: { inherits: 'B', permissions: ['a'] },
+  B: { inherits: 'A', permissions: ['b'] },  // Circular!
+}
+
+try {
+  createAuth({ rolePermissions, ... })
+} catch (error) {
+  if (error instanceof CircularInheritanceError) {
+    console.log(error.cycle)  // ['A', 'B', 'A']
+  }
+}
+```
+
+### Resolving Permissions Manually
+
+For debugging or advanced use cases, resolve permissions manually:
+
+```typescript
+import { resolvePermissions } from '@alfredaoo/auth-policies'
+
+const resolved = resolvePermissions(rolePermissions)
+console.log(resolved.ADMIN)  // All permissions including inherited
+```
+
 ## TypeScript
 
 The library is written in TypeScript and provides full type safety:

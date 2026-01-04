@@ -7,6 +7,59 @@ export interface BaseUser<TRole extends string = string> {
 }
 
 /**
+ * Role definition with inheritance support
+ *
+ * @example
+ * ```typescript
+ * // Simple array of permissions
+ * const simpleRole: RoleDefinition = ['view.user', 'create.user']
+ *
+ * // With inheritance from a single role
+ * const adminRole: RoleDefinition<'OPERATOR'> = {
+ *   inherits: 'OPERATOR',
+ *   permissions: ['delete.user'],
+ * }
+ *
+ * // With inheritance from multiple roles
+ * const superAdmin: RoleDefinition<'ADMIN' | 'BILLING'> = {
+ *   inherits: ['ADMIN', 'BILLING'],
+ *   permissions: ['manage.system'],
+ * }
+ * ```
+ */
+export type RoleDefinition<TRole extends string = string> =
+  | string[]
+  | {
+      /**
+       * Role(s) to inherit permissions from
+       */
+      inherits: TRole | TRole[]
+      /**
+       * Additional permissions for this role
+       */
+      permissions: string[]
+    }
+
+/**
+ * Role permissions configuration supporting both flat and hierarchical definitions
+ *
+ * @example
+ * ```typescript
+ * const rolePermissions: RolePermissions<'VIEWER' | 'ADMIN'> = {
+ *   VIEWER: ['view.user', 'view.post'],
+ *   ADMIN: {
+ *     inherits: 'VIEWER',
+ *     permissions: ['create.user', 'delete.user'],
+ *   },
+ * }
+ * ```
+ */
+export type RolePermissions<TRole extends string = string> = Record<
+  TRole,
+  RoleDefinition<TRole>
+>
+
+/**
  * Cache configuration options for memoizing policy results
  */
 export interface CacheConfig {
@@ -71,10 +124,24 @@ export interface AuthConfig<
   TResourceType extends string = string
 > {
   /**
-   * Map of roles to their permissions
-   * Example: { ADMIN: ['view.user', 'create.user'], OPERATOR: ['view.user'] }
+   * Map of roles to their permissions (supports inheritance)
+   *
+   * @example
+   * ```typescript
+   * // Flat permissions
+   * rolePermissions: {
+   *   ADMIN: ['view.user', 'create.user'],
+   *   OPERATOR: ['view.user'],
+   * }
+   *
+   * // With inheritance
+   * rolePermissions: {
+   *   VIEWER: ['view.user'],
+   *   ADMIN: { inherits: 'VIEWER', permissions: ['create.user', 'delete.user'] },
+   * }
+   * ```
    */
-  rolePermissions: Record<TRole, string[]>
+  rolePermissions: RolePermissions<TRole>
 
   /**
    * Map of resource types to their policies
