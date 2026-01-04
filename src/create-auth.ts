@@ -462,6 +462,7 @@ export function createAuth<
     hasAllPermissions: (user: TUser, permissions: string[]) =>
       permissionChecker.hasAllPermissions(user, permissions),
     getPermissions: (user: TUser) => permissionChecker.getPermissions(user),
+    getRoles: (user: TUser) => permissionChecker.getRoles(user),
 
     // Access to the permission checker for advanced use cases
     permissionChecker,

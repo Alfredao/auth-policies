@@ -848,6 +848,71 @@ const resolved = resolvePermissions(rolePermissions)
 console.log(resolved.ADMIN)  // All permissions including inherited
 ```
 
+## Multiple Roles
+
+Users can have multiple roles, and permissions are merged from all roles:
+
+### Single Role (Simple)
+
+```typescript
+interface User extends BaseUser<'ADMIN' | 'USER'> {
+  id: string
+  role: 'ADMIN' | 'USER'  // Single role
+}
+
+const user: User = { id: '1', role: 'ADMIN' }
+```
+
+### Multiple Roles
+
+```typescript
+interface User extends BaseUser<'VIEWER' | 'EDITOR' | 'BILLING'> {
+  id: string
+  roles: ('VIEWER' | 'EDITOR' | 'BILLING')[]  // Multiple roles
+}
+
+const user: User = {
+  id: '1',
+  roles: ['VIEWER', 'BILLING'],  // Has permissions from both roles
+}
+
+// Permissions are merged from all roles
+auth.hasPermission(user, 'view.dashboard')  // true (from VIEWER)
+auth.hasPermission(user, 'view.invoice')    // true (from BILLING)
+auth.hasPermission(user, 'create.post')     // false (EDITOR only)
+```
+
+### Combined (role + roles)
+
+You can use both `role` and `roles` together:
+
+```typescript
+const user = {
+  id: '1',
+  role: 'VIEWER',           // Primary role
+  roles: ['BILLING'],       // Additional roles
+}
+
+// Gets permissions from VIEWER + BILLING
+auth.getPermissions(user)   // ['view.dashboard', 'view.invoice', ...]
+auth.getRoles(user)         // ['VIEWER', 'BILLING']
+```
+
+### Utility Functions
+
+```typescript
+// Get all roles for a user
+const roles = auth.getRoles(user)  // ['VIEWER', 'BILLING']
+
+// Get all permissions (merged from all roles)
+const permissions = auth.getPermissions(user)
+
+// Check permissions across all roles
+auth.hasPermission(user, 'view.invoice')
+auth.hasAnyPermission(user, ['view.invoice', 'create.post'])
+auth.hasAllPermissions(user, ['view.dashboard', 'view.invoice'])
+```
+
 ## TypeScript
 
 The library is written in TypeScript and provides full type safety:

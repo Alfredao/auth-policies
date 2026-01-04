@@ -1,4 +1,4 @@
-import type { AuthConfig, AuthorizeOptions, BaseUser } from './types'
+import type { AuthConfig, AuthorizeOptions, BaseUser, RolePermissions } from './types'
 import {
   UnauthorizedException,
   UnauthenticatedException,
@@ -6,6 +6,46 @@ import {
   createErrorMessage,
 } from './exceptions'
 import { createAuth } from './create-auth'
+import { resolvePermissions } from './permissions'
+
+/**
+ * Get all permissions for a user from their roles
+ * Supports both single role and multiple roles
+ */
+function getUserPermissions<TRole extends string>(
+  user: BaseUser<TRole>,
+  rolePermissions: RolePermissions<TRole>
+): string[] {
+  const resolvedPerms = resolvePermissions(rolePermissions)
+  const userRoles: TRole[] = []
+
+  // Add single role if present
+  if (user.role) {
+    userRoles.push(user.role as TRole)
+  }
+
+  // Add multiple roles if present
+  if (user.roles && Array.isArray(user.roles)) {
+    for (const role of user.roles) {
+      if (!userRoles.includes(role as TRole)) {
+        userRoles.push(role as TRole)
+      }
+    }
+  }
+
+  // Merge permissions from all roles
+  const permissions = new Set<string>()
+  for (const role of userRoles) {
+    const rolePerms = resolvedPerms[role]
+    if (rolePerms) {
+      for (const perm of rolePerms) {
+        permissions.add(perm)
+      }
+    }
+  }
+
+  return [...permissions]
+}
 
 /**
  * Options for the withAuth wrapper
@@ -191,7 +231,7 @@ export function createPermissionMiddleware<
         )
       }
 
-      const userPermissions = rolePermissions[user.role] ?? []
+      const userPermissions = getUserPermissions(user, rolePermissions)
       const hasPermission = userPermissions.includes(options.permission)
 
       if (!hasPermission) {
@@ -412,7 +452,7 @@ export function createExpressAuth<
 
         req.user = user
 
-        const userPermissions = rolePermissions[user.role] ?? []
+        const userPermissions = getUserPermissions(user, rolePermissions)
         const hasPermission = userPermissions.includes(permission)
 
         if (!hasPermission) {

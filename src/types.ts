@@ -1,9 +1,42 @@
 /**
  * Base user type that applications must extend
+ *
+ * Supports both single role and multiple roles:
+ *
+ * @example
+ * ```typescript
+ * // Single role (simple)
+ * interface User extends BaseUser<'ADMIN' | 'USER'> {
+ *   id: string
+ *   role: 'ADMIN' | 'USER'
+ * }
+ *
+ * // Multiple roles
+ * interface User extends BaseUser<'VIEWER' | 'EDITOR' | 'BILLING'> {
+ *   id: string
+ *   roles: ('VIEWER' | 'EDITOR' | 'BILLING')[]
+ * }
+ *
+ * // Both (role as primary, roles as additional)
+ * interface User extends BaseUser<Role> {
+ *   id: string
+ *   role: Role
+ *   roles?: Role[]
+ * }
+ * ```
  */
 export interface BaseUser<TRole extends string = string> {
   id: string
-  role: TRole
+  /**
+   * Single role (for simple use cases)
+   * If both role and roles are provided, they are combined
+   */
+  role?: TRole
+  /**
+   * Multiple roles (for complex use cases)
+   * Permissions from all roles are merged
+   */
+  roles?: TRole[]
 }
 
 /**

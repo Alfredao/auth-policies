@@ -143,12 +143,64 @@ export function createPermissionChecker<
   const resolvedPermissions = resolvePermissions(rolePermissions)
 
   /**
+   * Get all roles for a user (combines role + roles)
+   * Supports backwards compatibility with single role
+   */
+  function getUserRoles(user: TUser): TRole[] {
+    const roles: TRole[] = []
+
+    // Add single role if present
+    if (user.role) {
+      roles.push(user.role as TRole)
+    }
+
+    // Add multiple roles if present
+    if (user.roles && Array.isArray(user.roles)) {
+      for (const role of user.roles) {
+        if (!roles.includes(role as TRole)) {
+          roles.push(role as TRole)
+        }
+      }
+    }
+
+    return roles
+  }
+
+  /**
+   * Get all permissions for a user (from all their roles)
+   * Merges and deduplicates permissions from all roles
+   */
+  function getPermissions(user: TUser): string[] {
+    const roles = getUserRoles(user)
+    const permissionSet = new Set<string>()
+
+    for (const role of roles) {
+      const rolePerms = resolvedPermissions[role]
+      if (rolePerms) {
+        for (const perm of rolePerms) {
+          permissionSet.add(perm)
+        }
+      }
+    }
+
+    return [...permissionSet]
+  }
+
+  /**
    * Check if a user has a specific permission
+   * Checks against all of the user's roles
    */
   function hasPermission(user: TUser, permission: string): boolean {
-    const permissions = resolvedPermissions[user.role as TRole]
-    if (!permissions) return false
-    return permissions.includes(permission)
+    const roles = getUserRoles(user)
+
+    for (const role of roles) {
+      const permissions = resolvedPermissions[role]
+      if (permissions?.includes(permission)) {
+        return true
+      }
+    }
+
+    return false
   }
 
   /**
@@ -166,10 +218,10 @@ export function createPermissionChecker<
   }
 
   /**
-   * Get all permissions for a user's role (including inherited)
+   * Get all roles for a user
    */
-  function getPermissions(user: TUser): string[] {
-    return resolvedPermissions[user.role as TRole] || []
+  function getRoles(user: TUser): TRole[] {
+    return getUserRoles(user)
   }
 
   /**
@@ -184,6 +236,7 @@ export function createPermissionChecker<
     hasAnyPermission,
     hasAllPermissions,
     getPermissions,
+    getRoles,
     getResolvedPermissions,
   }
 }

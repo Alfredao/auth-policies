@@ -431,3 +431,213 @@ describe('createAuth with inherited permissions', () => {
     expect(checker.hasPermission(adminUser, 'delete.resource')).toBe(true)
   })
 })
+
+// ============================================
+// Multiple Roles Tests
+// ============================================
+
+describe('createPermissionChecker with multiple roles', () => {
+  type Role = 'VIEWER' | 'EDITOR' | 'BILLING' | 'SUPPORT'
+
+  const rolePermissions: RolePermissions<Role> = {
+    VIEWER: ['view.dashboard', 'view.profile'],
+    EDITOR: ['view.dashboard', 'create.post', 'update.post'],
+    BILLING: ['view.invoice', 'create.invoice', 'manage.subscription'],
+    SUPPORT: ['view.ticket', 'update.ticket', 'close.ticket'],
+  }
+
+  const checker = createPermissionChecker<BaseUser<Role>, Role>(rolePermissions)
+
+  describe('users with roles[] array', () => {
+    it('should get permissions from multiple roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['VIEWER', 'BILLING'],
+      }
+
+      expect(checker.hasPermission(user, 'view.dashboard')).toBe(true)
+      expect(checker.hasPermission(user, 'view.invoice')).toBe(true)
+      expect(checker.hasPermission(user, 'create.invoice')).toBe(true)
+      expect(checker.hasPermission(user, 'create.post')).toBe(false) // EDITOR only
+    })
+
+    it('should merge permissions from all roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['EDITOR', 'SUPPORT'],
+      }
+
+      const permissions = checker.getPermissions(user)
+
+      expect(permissions).toContain('view.dashboard')
+      expect(permissions).toContain('create.post')
+      expect(permissions).toContain('update.post')
+      expect(permissions).toContain('view.ticket')
+      expect(permissions).toContain('update.ticket')
+      expect(permissions).toContain('close.ticket')
+      expect(permissions).toHaveLength(6)
+    })
+
+    it('should deduplicate permissions across roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['VIEWER', 'EDITOR'], // Both have view.dashboard
+      }
+
+      const permissions = checker.getPermissions(user)
+      const dashboardCount = permissions.filter(p => p === 'view.dashboard').length
+
+      expect(dashboardCount).toBe(1) // Should only appear once
+    })
+
+    it('should return all roles for a user', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['VIEWER', 'BILLING', 'SUPPORT'],
+      }
+
+      const roles = checker.getRoles(user)
+
+      expect(roles).toContain('VIEWER')
+      expect(roles).toContain('BILLING')
+      expect(roles).toContain('SUPPORT')
+      expect(roles).toHaveLength(3)
+    })
+
+    it('should handle empty roles array', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: [],
+      }
+
+      expect(checker.hasPermission(user, 'view.dashboard')).toBe(false)
+      expect(checker.getPermissions(user)).toEqual([])
+      expect(checker.getRoles(user)).toEqual([])
+    })
+  })
+
+  describe('users with both role and roles', () => {
+    it('should combine single role with roles array', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        role: 'VIEWER',
+        roles: ['BILLING'],
+      }
+
+      expect(checker.hasPermission(user, 'view.dashboard')).toBe(true) // from role
+      expect(checker.hasPermission(user, 'view.invoice')).toBe(true) // from roles
+      expect(checker.hasPermission(user, 'create.post')).toBe(false) // neither
+    })
+
+    it('should deduplicate when same role in both role and roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        role: 'VIEWER',
+        roles: ['VIEWER', 'BILLING'],
+      }
+
+      const roles = checker.getRoles(user)
+
+      expect(roles.filter(r => r === 'VIEWER')).toHaveLength(1) // No duplicates
+      expect(roles).toHaveLength(2) // VIEWER + BILLING
+    })
+
+    it('should get permissions from combined roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        role: 'EDITOR',
+        roles: ['SUPPORT'],
+      }
+
+      const permissions = checker.getPermissions(user)
+
+      expect(permissions).toContain('view.dashboard') // EDITOR
+      expect(permissions).toContain('create.post') // EDITOR
+      expect(permissions).toContain('view.ticket') // SUPPORT
+      expect(permissions).toContain('close.ticket') // SUPPORT
+    })
+  })
+
+  describe('hasAnyPermission with multiple roles', () => {
+    it('should return true if any permission matches across roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['VIEWER', 'BILLING'],
+      }
+
+      expect(checker.hasAnyPermission(user, ['create.post', 'view.invoice'])).toBe(true)
+      expect(checker.hasAnyPermission(user, ['create.post', 'close.ticket'])).toBe(false)
+    })
+  })
+
+  describe('hasAllPermissions with multiple roles', () => {
+    it('should return true if user has all permissions across roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        roles: ['VIEWER', 'BILLING'],
+      }
+
+      expect(checker.hasAllPermissions(user, ['view.dashboard', 'view.invoice'])).toBe(true)
+      expect(checker.hasAllPermissions(user, ['view.dashboard', 'create.post'])).toBe(false)
+    })
+  })
+
+  describe('backwards compatibility', () => {
+    it('should still work with single role only', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+        role: 'EDITOR',
+      }
+
+      expect(checker.hasPermission(user, 'create.post')).toBe(true)
+      expect(checker.hasPermission(user, 'view.invoice')).toBe(false)
+      expect(checker.getRoles(user)).toEqual(['EDITOR'])
+    })
+
+    it('should handle user with neither role nor roles', () => {
+      const user: BaseUser<Role> = {
+        id: '1',
+      }
+
+      expect(checker.hasPermission(user, 'view.dashboard')).toBe(false)
+      expect(checker.getPermissions(user)).toEqual([])
+      expect(checker.getRoles(user)).toEqual([])
+    })
+  })
+})
+
+describe('createAuth with multiple roles', () => {
+  it('should work with users having multiple roles', async () => {
+    type Role = 'VIEWER' | 'ADMIN'
+
+    const rolePermissions: RolePermissions<Role> = {
+      VIEWER: ['view.post'],
+      ADMIN: ['view.post', 'delete.post'],
+    }
+
+    const PostPolicy = {
+      view: async () => true,
+      delete: async (user: BaseUser<Role>) => {
+        const checker = createPermissionChecker<BaseUser<Role>, Role>(rolePermissions)
+        return checker.hasPermission(user, 'delete.post')
+      },
+    }
+
+    const { createAuth } = await import('../src/create-auth')
+
+    const multiRoleUser: BaseUser<Role> = {
+      id: '1',
+      roles: ['VIEWER', 'ADMIN'],
+    }
+
+    const auth = createAuth<BaseUser<Role>, Role, 'Post'>({
+      rolePermissions,
+      policies: { Post: PostPolicy },
+      getUser: async () => multiRoleUser,
+    })
+
+    // User has delete.post permission through ADMIN role
+    expect(auth.hasPermission(multiRoleUser, 'delete.post')).toBe(true)
+    expect(auth.getRoles(multiRoleUser)).toEqual(['VIEWER', 'ADMIN'])
+  })
+})
