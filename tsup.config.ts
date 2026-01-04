@@ -27,4 +27,15 @@ export default defineConfig([
       js: '"use client";',
     },
   },
+  // Middleware helpers
+  {
+    entry: ['src/middleware.ts'],
+    format: ['cjs', 'esm'],
+    dts: true,
+    splitting: false,
+    sourcemap: true,
+    clean: false,
+    treeshake: true,
+    minify: false,
+  },
 ])

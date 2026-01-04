@@ -366,6 +366,123 @@ function PostView({ post }: { post: Post }) {
 }
 ```
 
+## Middleware
+
+The library provides middleware helpers for API route protection.
+
+### Next.js App Router
+
+Wrap API route handlers with authorization:
+
+```typescript
+// lib/authorization/middleware.ts
+import { createAuthMiddleware } from '@alfredaoo/auth-policies/middleware'
+
+export const withAuth = createAuthMiddleware({
+  rolePermissions,
+  policies,
+  getUser: async () => {
+    const session = await getSession()
+    return session?.user ?? null
+  },
+})
+```
+
+```typescript
+// app/api/posts/[id]/route.ts
+import { withAuth } from '@/lib/authorization/middleware'
+
+export const DELETE = withAuth(
+  async (request, { params }) => {
+    await deletePost(params.id)
+    return Response.json({ success: true })
+  },
+  { action: 'delete', type: 'Post' }
+)
+
+// With context-aware check
+export const PUT = withAuth(
+  async (request, { params }) => {
+    const data = await request.json()
+    const post = await updatePost(params.id, data)
+    return Response.json(post)
+  },
+  {
+    action: 'update',
+    type: 'Post',
+    getResource: async (req) => {
+      const url = new URL(req.url)
+      const id = url.pathname.split('/').pop()
+      return await getPost(id)
+    },
+  }
+)
+```
+
+### Permission-Based Middleware
+
+Simpler middleware that checks permissions directly:
+
+```typescript
+import { createPermissionMiddleware } from '@alfredaoo/auth-policies/middleware'
+
+const requirePermission = createPermissionMiddleware({
+  rolePermissions,
+  getUser: async () => getSession()?.user ?? null,
+})
+
+export const DELETE = requirePermission(
+  async (request) => {
+    return Response.json({ success: true })
+  },
+  { permission: 'delete.post' }
+)
+```
+
+### Express / Hono
+
+Compatible middleware for Express, Hono, and similar frameworks:
+
+```typescript
+import express from 'express'
+import { createExpressAuth } from '@alfredaoo/auth-policies/middleware'
+
+const app = express()
+
+const { protect, requireAuth, requirePermission } = createExpressAuth({
+  rolePermissions,
+  policies,
+  getUser: (req) => req.user, // From your auth middleware
+})
+
+// Require authentication only
+app.get('/profile', requireAuth, (req, res) => {
+  res.json(req.user)
+})
+
+// Policy-based protection
+app.delete('/posts/:id', protect({ action: 'delete', type: 'Post' }), (req, res) => {
+  res.json({ success: true })
+})
+
+// Permission-based protection
+app.post('/posts', requirePermission('create.post'), (req, res) => {
+  res.json({ success: true })
+})
+
+// With resource for context-aware check
+app.put('/posts/:id',
+  protect({
+    action: 'update',
+    type: 'Post',
+    getResource: async (req) => await getPost(req.params.id),
+  }),
+  (req, res) => {
+    res.json({ success: true })
+  }
+)
+```
+
 ## Context-Aware Policies
 
 Policies can receive the resource being accessed for dynamic authorization:
