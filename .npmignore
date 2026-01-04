@@ -1,0 +1,20 @@
+# Source files (only publish dist)
+src/
+tsconfig.json
+tsup.config.ts
+
+# Dev files
+.gitignore
+.eslintrc*
+.prettierrc*
+*.test.ts
+*.spec.ts
+__tests__/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
