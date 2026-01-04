@@ -115,7 +115,8 @@ describe('createAuthMiddleware', () => {
       const request = new Request('http://localhost/api/posts/1', { method: 'DELETE' })
       await wrapped(request, {})
 
-      expect(policySpy).toHaveBeenCalledWith(adminUser, mockResource)
+      // Policy is called with user, resource, and tenantId (null when no tenant config)
+      expect(policySpy).toHaveBeenCalledWith(adminUser, mockResource, null)
     })
   })
 })

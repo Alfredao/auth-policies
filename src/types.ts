@@ -40,6 +40,47 @@ export interface BaseUser<TRole extends string = string> {
 }
 
 /**
+ * Multi-tenant user type that extends BaseUser with tenant-specific roles
+ *
+ * @example
+ * ```typescript
+ * // User with system role and per-tenant roles
+ * interface User extends TenantUser<
+ *   'SUPER_ADMIN' | 'USER',           // System roles
+ *   'OWNER' | 'ADMIN' | 'MEMBER',     // Tenant roles
+ *   string                             // Tenant ID type
+ * > {
+ *   id: string
+ *   role: 'SUPER_ADMIN' | 'USER'
+ *   tenantRoles: {
+ *     [businessId: string]: 'OWNER' | 'ADMIN' | 'MEMBER'
+ *   }
+ * }
+ *
+ * // Example user
+ * const user: User = {
+ *   id: '1',
+ *   role: 'USER',
+ *   tenantRoles: {
+ *     'business-1': 'OWNER',
+ *     'business-2': 'MEMBER',
+ *   },
+ * }
+ * ```
+ */
+export interface TenantUser<
+  TSystemRole extends string = string,
+  TTenantRole extends string = string,
+  TTenantId extends string | number = string
+> extends BaseUser<TSystemRole> {
+  /**
+   * Tenant-specific roles - maps tenant IDs to roles within that tenant
+   * A user can have different roles in different tenants
+   */
+  tenantRoles?: Record<TTenantId & string, TTenantRole | TTenantRole[]>
+}
+
+/**
  * Role definition with inheritance support
  *
  * @example
@@ -124,11 +165,26 @@ export interface CacheConfig {
 }
 
 /**
- * Policy method signature - takes the user and optionally a resource
+ * Policy method signature - takes the user, optionally a resource, and optionally a tenant ID
+ *
+ * @example
+ * ```typescript
+ * // Simple policy
+ * const view: PolicyMethod<User> = (user) => user.role === 'ADMIN'
+ *
+ * // Resource-aware policy
+ * const update: PolicyMethod<User> = (user, resource) =>
+ *   user.role === 'ADMIN' || resource?.ownerId === user.id
+ *
+ * // Tenant-aware policy
+ * const manage: PolicyMethod<User> = (user, resource, tenantId) =>
+ *   getTenantRoles(user, tenantId).includes('OWNER')
+ * ```
  */
 export type PolicyMethod<TUser extends BaseUser = BaseUser> = (
   user: TUser,
-  resource?: unknown
+  resource?: unknown,
+  tenantId?: string | null
 ) => Promise<boolean> | boolean
 
 /**
@@ -243,6 +299,45 @@ export interface AuthConfig<
    * ```
    */
   cache?: CacheConfig
+
+  /**
+   * Multi-tenancy configuration
+   * When provided, enables tenant-scoped permission checking
+   *
+   * @example
+   * ```typescript
+   * const auth = createAuth({
+   *   rolePermissions: systemRolePermissions,
+   *   policies,
+   *   getUser,
+   *   tenant: {
+   *     rolePermissions: tenantRolePermissions,
+   *     getTenantId: async () => {
+   *       const session = await getSession()
+   *       return session?.activeTenantId ?? null
+   *     },
+   *   },
+   * })
+   * ```
+   */
+  tenant?: TenantConfig<TRole>
+}
+
+/**
+ * Multi-tenancy configuration
+ */
+export interface TenantConfig<TTenantRole extends string = string> {
+  /**
+   * Tenant-level role permissions
+   * These apply only within the context of a specific tenant
+   */
+  rolePermissions: RolePermissions<TTenantRole>
+
+  /**
+   * Function to get the current tenant ID from context
+   * Returns null if no tenant context is active
+   */
+  getTenantId: () => Promise<string | null> | string | null
 }
 
 /**
@@ -258,6 +353,12 @@ export interface AuthorizeOptions {
    * Custom error message
    */
   message?: string
+
+  /**
+   * Override the tenant ID for this specific check
+   * If not provided, uses getTenantId() from tenant config
+   */
+  tenantId?: string
 }
 
 /**
@@ -309,6 +410,11 @@ export interface AuditLogEntry<
    * The resource being accessed (if provided)
    */
   resource?: unknown
+
+  /**
+   * The tenant ID context (if multi-tenancy is enabled)
+   */
+  tenantId?: string | null
 
   /**
    * Duration of the policy check in milliseconds

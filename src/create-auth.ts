@@ -1,4 +1,4 @@
-import type { AuthConfig, AuthorizeOptions, BaseUser, AuditLogEntry } from './types'
+import type { AuthConfig, AuthorizeOptions, BaseUser, AuditLogEntry, TenantUser } from './types'
 import {
   UnauthorizedException,
   UnauthenticatedException,
@@ -6,7 +6,7 @@ import {
   AuthErrorCode,
   createErrorMessage,
 } from './exceptions'
-import { createPermissionChecker } from './permissions'
+import { createPermissionChecker, createTenantPermissionChecker, getTenantRoles } from './permissions'
 import { PolicyCache } from './cache'
 
 /**
@@ -42,13 +42,44 @@ export function createAuth<
   TRole extends string = string,
   TResourceType extends string = string
 >(config: AuthConfig<TUser, TRole, TResourceType>) {
-  const { rolePermissions, policies, getUser, handlers, debug = false, onAudit, cache: cacheConfig } = config
+  const {
+    rolePermissions,
+    policies,
+    getUser,
+    handlers,
+    debug = false,
+    onAudit,
+    cache: cacheConfig,
+    tenant: tenantConfig,
+  } = config
 
   // Create permission utilities
   const permissionChecker = createPermissionChecker<TUser, TRole>(rolePermissions)
 
+  // Create tenant permission checker if tenant config is provided
+  // Note: Tenant role permissions use the same TRole type constraint for simplicity
+  const tenantPermissionChecker = tenantConfig
+    ? createTenantPermissionChecker<TRole, TRole>({
+        systemRolePermissions: rolePermissions,
+        tenantRolePermissions: tenantConfig.rolePermissions,
+      })
+    : null
+
   // Create cache if enabled
   const cache = cacheConfig?.enabled ? new PolicyCache(cacheConfig) : null
+
+  /**
+   * Get the current tenant ID from config or options
+   */
+  async function resolveTenantId(optionsTenantId?: string): Promise<string | null> {
+    if (optionsTenantId !== undefined) {
+      return optionsTenantId
+    }
+    if (tenantConfig?.getTenantId) {
+      return await tenantConfig.getTenantId()
+    }
+    return null
+  }
 
   /**
    * Debug logger - only logs when debug mode is enabled
@@ -102,9 +133,10 @@ export function createAuth<
   ): Promise<boolean> {
     const startTime = Date.now()
     const user = await getUser()
+    const tenantId = await resolveTenantId(options?.tenantId)
 
     if (!user) {
-      debugLog('checkPermission denied: No authenticated user', { action, type })
+      debugLog('checkPermission denied: No authenticated user', { action, type, tenantId })
       await audit({
         user: null,
         action,
@@ -112,6 +144,7 @@ export function createAuth<
         allowed: false,
         reason: 'unauthenticated',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -120,7 +153,7 @@ export function createAuth<
 
     const policy = policies[type]
     if (!policy) {
-      debugLog('checkPermission failed: Policy not found', { action, type })
+      debugLog('checkPermission failed: Policy not found', { action, type, tenantId })
       console.warn(
         `[auth-policies] No policy found for resource type: ${type}. ` +
           `Available types: ${Object.keys(policies).join(', ') || 'none'}`
@@ -132,6 +165,7 @@ export function createAuth<
         allowed: false,
         reason: 'policy_not_found',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -140,7 +174,7 @@ export function createAuth<
 
     const policyMethod = policy[action]
     if (!policyMethod) {
-      debugLog('checkPermission failed: Action not found', { action, type })
+      debugLog('checkPermission failed: Action not found', { action, type, tenantId })
       console.warn(
         `[auth-policies] No policy method '${action}' on ${type}. ` +
           `Available actions: ${Object.keys(policy).join(', ') || 'none'}`
@@ -152,6 +186,7 @@ export function createAuth<
         allowed: false,
         reason: 'action_not_found',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -159,8 +194,8 @@ export function createAuth<
     }
 
     try {
-      // Check cache first
-      const cacheKey = cache?.generateKey(action, type, user.id, options?.resource)
+      // Check cache first (include tenantId in cache key)
+      const cacheKey = cache?.generateKey(action, type, user.id, options?.resource, tenantId)
       if (cache && cacheKey) {
         const cachedResult = cache.get(cacheKey)
         if (cachedResult !== undefined) {
@@ -168,6 +203,7 @@ export function createAuth<
             action,
             type,
             userId: user.id,
+            tenantId,
             allowed: cachedResult,
           })
           await audit({
@@ -177,6 +213,7 @@ export function createAuth<
             allowed: cachedResult,
             reason: cachedResult ? undefined : 'policy_denied',
             resource: options?.resource,
+            tenantId,
             duration: Date.now() - startTime,
             metadata: { ...options?.metadata, cached: true },
           })
@@ -184,7 +221,8 @@ export function createAuth<
         }
       }
 
-      const result = await policyMethod(user, options?.resource)
+      // Pass tenantId to policy method for tenant-aware checks
+      const result = await policyMethod(user, options?.resource, tenantId)
 
       // Cache the result
       if (cache && cacheKey) {
@@ -197,6 +235,7 @@ export function createAuth<
         type,
         userId: user.id,
         role: user.role,
+        tenantId,
         allowed: result,
       })
       await audit({
@@ -206,6 +245,7 @@ export function createAuth<
         allowed: result,
         reason: result ? undefined : 'policy_denied',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -218,6 +258,7 @@ export function createAuth<
       debugLog('checkPermission error', {
         action,
         type,
+        tenantId,
         error: error instanceof Error ? error.message : String(error),
       })
       await audit({
@@ -227,6 +268,7 @@ export function createAuth<
         allowed: false,
         reason: 'policy_denied',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: {
           ...options?.metadata,
@@ -248,9 +290,10 @@ export function createAuth<
   ): Promise<true> {
     const startTime = Date.now()
     const user = await getUser()
+    const tenantId = await resolveTenantId(options?.tenantId)
 
     if (!user) {
-      debugLog('authorize failed: No authenticated user', { action, type })
+      debugLog('authorize failed: No authenticated user', { action, type, tenantId })
       await audit({
         user: null,
         action,
@@ -258,6 +301,7 @@ export function createAuth<
         allowed: false,
         reason: 'unauthenticated',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -270,7 +314,7 @@ export function createAuth<
     if (!policy) {
       const availableTypes = Object.keys(policies).join(', ') || 'none'
       const message = `Policy not found for resource type '${type}'. Available types: ${availableTypes}`
-      debugLog('authorize failed: Policy not found', { action, type, availableTypes })
+      debugLog('authorize failed: Policy not found', { action, type, tenantId, availableTypes })
       await audit({
         user,
         action,
@@ -278,6 +322,7 @@ export function createAuth<
         allowed: false,
         reason: 'policy_not_found',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -292,7 +337,7 @@ export function createAuth<
     if (!policyMethod) {
       const availableActions = Object.keys(policy).join(', ') || 'none'
       const message = `Action '${action}' not found on ${type}. Available actions: ${availableActions}`
-      debugLog('authorize failed: Action not found', { action, type, availableActions })
+      debugLog('authorize failed: Action not found', { action, type, tenantId, availableActions })
       await audit({
         user,
         action,
@@ -300,6 +345,7 @@ export function createAuth<
         allowed: false,
         reason: 'action_not_found',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: options?.metadata,
       })
@@ -310,8 +356,8 @@ export function createAuth<
       })
     }
 
-    // Check cache first
-    const cacheKey = cache?.generateKey(action, type, user.id, options?.resource)
+    // Check cache first (include tenantId in cache key)
+    const cacheKey = cache?.generateKey(action, type, user.id, options?.resource, tenantId)
     let allowed: boolean
     let fromCache = false
 
@@ -322,17 +368,20 @@ export function createAuth<
           action,
           type,
           userId: user.id,
+          tenantId,
           allowed: cachedResult,
         })
         allowed = cachedResult
         fromCache = true
       } else {
-        allowed = await policyMethod(user, options?.resource)
+        // Pass tenantId to policy method for tenant-aware checks
+        allowed = await policyMethod(user, options?.resource, tenantId)
         cache.set(cacheKey, allowed)
         debugLog('authorize cache set', { cacheKey, allowed })
       }
     } else {
-      allowed = await policyMethod(user, options?.resource)
+      // Pass tenantId to policy method for tenant-aware checks
+      allowed = await policyMethod(user, options?.resource, tenantId)
     }
 
     if (!allowed) {
@@ -342,6 +391,7 @@ export function createAuth<
         type,
         userId: user.id,
         role: user.role,
+        tenantId,
       })
 
       await audit({
@@ -351,6 +401,7 @@ export function createAuth<
         allowed: false,
         reason: 'policy_denied',
         resource: options?.resource,
+        tenantId,
         duration: Date.now() - startTime,
         metadata: { ...options?.metadata, cached: fromCache },
       })
@@ -370,6 +421,7 @@ export function createAuth<
       type,
       userId: user.id,
       role: user.role,
+      tenantId,
     })
 
     await audit({
@@ -378,6 +430,7 @@ export function createAuth<
       resourceType: type,
       allowed: true,
       resource: options?.resource,
+      tenantId,
       duration: Date.now() - startTime,
       metadata: { ...options?.metadata, cached: fromCache },
     })
@@ -467,6 +520,45 @@ export function createAuth<
     // Access to the permission checker for advanced use cases
     permissionChecker,
 
+    // Tenant utilities (only available when tenant config is provided)
+    tenant: tenantPermissionChecker
+      ? {
+          /**
+           * Get tenant ID from config or resolve it
+           */
+          getTenantId: resolveTenantId,
+
+          /**
+           * Get tenant roles for a user in a specific tenant
+           */
+          getTenantRoles: (user: TUser, tenantId: string) =>
+            getTenantRoles(user as TenantUser<TRole, TRole>, tenantId),
+
+          /**
+           * Get all permissions for a user (system + tenant)
+           */
+          getPermissions: (user: TUser, tenantId: string | null) =>
+            tenantPermissionChecker.getPermissions(user as TenantUser<TRole, TRole>, tenantId),
+
+          /**
+           * Check if user has a permission (system or tenant level)
+           */
+          hasPermission: (user: TUser, permission: string, tenantId: string | null) =>
+            tenantPermissionChecker.hasPermission(user as TenantUser<TRole, TRole>, permission, tenantId),
+
+          /**
+           * Get roles for a user (system + tenant)
+           */
+          getRoles: (user: TUser, tenantId: string | null) =>
+            tenantPermissionChecker.getRoles(user as TenantUser<TRole, TRole>, tenantId),
+
+          /**
+           * Access to the full tenant permission checker
+           */
+          permissionChecker: tenantPermissionChecker,
+        }
+      : null,
+
     // Cache utilities (only available when caching is enabled)
     cache: cache
       ? {
@@ -486,6 +578,11 @@ export function createAuth<
            */
           invalidateResource: (resourceType: string, resourceId: string) =>
             cache.invalidateResource(resourceType, resourceId),
+
+          /**
+           * Invalidate all cached entries for a specific tenant
+           */
+          invalidateTenant: (tenantId: string) => cache.invalidateTenant(tenantId),
 
           /**
            * Clear all cached entries
@@ -510,6 +607,7 @@ export function createAuth<
       policies,
       debug,
       cacheEnabled: !!cache,
+      tenantEnabled: !!tenantConfig,
     },
   }
 }

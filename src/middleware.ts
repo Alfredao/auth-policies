@@ -64,6 +64,10 @@ export interface WithAuthOptions<TResourceType extends string = string> {
    */
   getResource?: (req: Request) => Promise<unknown> | unknown
   /**
+   * Function to extract tenant ID from request for multi-tenancy
+   */
+  getTenantId?: (req: Request) => Promise<string | null> | string | null
+  /**
    * Custom error message
    */
   message?: string
@@ -127,9 +131,17 @@ export function createAuthMiddleware<
           ? await options.getResource(request)
           : undefined
 
+        // Get tenant ID if extractor provided
+        const tenantIdValue = options.getTenantId
+          ? await options.getTenantId(request)
+          : undefined
+        // Convert null to undefined for AuthorizeOptions
+        const tenantId = tenantIdValue ?? undefined
+
         // Check authorization
         await auth.canApi(options.action, options.type, {
           resource,
+          tenantId,
           message: options.message,
         })
 
@@ -298,6 +310,10 @@ export interface ExpressAuthMiddlewareOptions<TResourceType extends string = str
    */
   getResource?: (req: MiddlewareRequest) => Promise<unknown> | unknown
   /**
+   * Function to extract tenant ID from request for multi-tenancy
+   */
+  getTenantId?: (req: MiddlewareRequest) => Promise<string | null> | string | null
+  /**
    * Custom error message
    */
   message?: string
@@ -413,7 +429,8 @@ export function createExpressAuth<
         }
 
         const resource = options.getResource ? await options.getResource(req) : undefined
-        const allowed = await policyMethod(user, resource)
+        const tenantId = options.getTenantId ? await options.getTenantId(req) : null
+        const allowed = await policyMethod(user, resource, tenantId)
 
         if (!allowed) {
           res.status(403).json({

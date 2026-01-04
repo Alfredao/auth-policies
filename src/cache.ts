@@ -72,15 +72,18 @@ export class PolicyCache {
 
   /**
    * Generate a cache key for a policy check
+   * Key format: action:resourceType:userId:resourceKey:tenantId
    */
   generateKey(
     action: string,
     resourceType: string,
     userId: string,
-    resource?: unknown
+    resource?: unknown,
+    tenantId?: string | null
   ): string {
     const resourceKey = resource ? this.getResourceKey(resource) : undefined
-    return `${action}:${resourceType}:${userId}:${resourceKey ?? 'no-resource'}`
+    const tenant = tenantId ?? 'no-tenant'
+    return `${action}:${resourceType}:${userId}:${resourceKey ?? 'no-resource'}:${tenant}`
   }
 
   /**
@@ -184,10 +187,24 @@ export class PolicyCache {
    */
   invalidateResource(resourceType: string, resourceId: string): number {
     let count = 0
-    const suffix = `:${resourceId}`
     for (const key of this.cache.keys()) {
       const parts = key.split(':')
-      if (parts[1] === resourceType && key.endsWith(suffix)) {
+      if (parts[1] === resourceType && parts[3] === resourceId) {
+        this.cache.delete(key)
+        count++
+      }
+    }
+    return count
+  }
+
+  /**
+   * Invalidate all entries for a specific tenant
+   */
+  invalidateTenant(tenantId: string): number {
+    let count = 0
+    const suffix = `:${tenantId}`
+    for (const key of this.cache.keys()) {
+      if (key.endsWith(suffix)) {
         this.cache.delete(key)
         count++
       }

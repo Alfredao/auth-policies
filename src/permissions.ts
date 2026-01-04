@@ -1,4 +1,4 @@
-import type { BaseUser, RoleDefinition, RolePermissions } from './types'
+import type { BaseUser, RoleDefinition, RolePermissions, TenantUser } from './types'
 
 /**
  * Error thrown when circular inheritance is detected
@@ -238,5 +238,257 @@ export function createPermissionChecker<
     getPermissions,
     getRoles,
     getResolvedPermissions,
+  }
+}
+
+/**
+ * Get tenant-specific roles for a user in a specific tenant
+ *
+ * @example
+ * ```typescript
+ * const user = {
+ *   id: '1',
+ *   role: 'USER',
+ *   tenantRoles: { 'business-1': 'OWNER', 'business-2': ['ADMIN', 'BILLING'] }
+ * }
+ *
+ * getTenantRoles(user, 'business-1') // ['OWNER']
+ * getTenantRoles(user, 'business-2') // ['ADMIN', 'BILLING']
+ * getTenantRoles(user, 'business-3') // []
+ * ```
+ */
+export function getTenantRoles<TTenantRole extends string>(
+  user: TenantUser<string, TTenantRole, string>,
+  tenantId: string
+): TTenantRole[] {
+  if (!user.tenantRoles || !tenantId) {
+    return []
+  }
+
+  const tenantRole = user.tenantRoles[tenantId]
+  if (!tenantRole) {
+    return []
+  }
+
+  if (Array.isArray(tenantRole)) {
+    return tenantRole
+  }
+
+  return [tenantRole]
+}
+
+/**
+ * Create a tenant-aware permission checker that combines system and tenant permissions
+ *
+ * @example
+ * ```typescript
+ * const checker = createTenantPermissionChecker({
+ *   systemRolePermissions: {
+ *     SUPER_ADMIN: ['*'],
+ *     USER: ['view.profile'],
+ *   },
+ *   tenantRolePermissions: {
+ *     OWNER: ['manage.business', 'view.reports', 'manage.staff'],
+ *     ADMIN: ['view.reports', 'manage.staff'],
+ *     MEMBER: ['view.reports'],
+ *   },
+ * })
+ *
+ * // User with system role 'USER' and tenant role 'OWNER' in 'business-1'
+ * const user = {
+ *   id: '1',
+ *   role: 'USER',
+ *   tenantRoles: { 'business-1': 'OWNER' },
+ * }
+ *
+ * // Combined permissions in tenant context
+ * checker.getPermissions(user, 'business-1')
+ * // ['view.profile', 'manage.business', 'view.reports', 'manage.staff']
+ *
+ * // Only system permissions without tenant context
+ * checker.getPermissions(user, null)
+ * // ['view.profile']
+ * ```
+ */
+export function createTenantPermissionChecker<
+  TSystemRole extends string = string,
+  TTenantRole extends string = string
+>(config: {
+  systemRolePermissions: RolePermissions<TSystemRole>
+  tenantRolePermissions: RolePermissions<TTenantRole>
+}) {
+  const { systemRolePermissions, tenantRolePermissions } = config
+
+  // Resolve permissions upfront
+  const resolvedSystemPermissions = resolvePermissions(systemRolePermissions)
+  const resolvedTenantPermissions = resolvePermissions(tenantRolePermissions)
+
+  /**
+   * Get system-level roles for a user
+   */
+  function getSystemRoles<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser
+  ): TSystemRole[] {
+    const roles: TSystemRole[] = []
+
+    if (user.role) {
+      roles.push(user.role as TSystemRole)
+    }
+
+    if (user.roles && Array.isArray(user.roles)) {
+      for (const role of user.roles) {
+        if (!roles.includes(role as TSystemRole)) {
+          roles.push(role as TSystemRole)
+        }
+      }
+    }
+
+    return roles
+  }
+
+  /**
+   * Get system-level permissions for a user
+   */
+  function getSystemPermissions<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser
+  ): string[] {
+    const roles = getSystemRoles(user)
+    const permissions = new Set<string>()
+
+    for (const role of roles) {
+      const rolePerms = resolvedSystemPermissions[role]
+      if (rolePerms) {
+        for (const perm of rolePerms) {
+          permissions.add(perm)
+        }
+      }
+    }
+
+    return [...permissions]
+  }
+
+  /**
+   * Get tenant-level permissions for a user in a specific tenant
+   */
+  function getTenantPermissions<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    tenantId: string | null
+  ): string[] {
+    if (!tenantId) {
+      return []
+    }
+
+    const roles = getTenantRoles<TTenantRole>(user, tenantId)
+    const permissions = new Set<string>()
+
+    for (const role of roles) {
+      const rolePerms = resolvedTenantPermissions[role]
+      if (rolePerms) {
+        for (const perm of rolePerms) {
+          permissions.add(perm)
+        }
+      }
+    }
+
+    return [...permissions]
+  }
+
+  /**
+   * Get all permissions for a user (system + tenant)
+   * If tenantId is null, only system permissions are returned
+   */
+  function getPermissions<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    tenantId: string | null
+  ): string[] {
+    const systemPerms = getSystemPermissions(user)
+    const tenantPerms = getTenantPermissions(user, tenantId)
+
+    // Merge and deduplicate
+    const allPerms = new Set<string>([...systemPerms, ...tenantPerms])
+    return [...allPerms]
+  }
+
+  /**
+   * Check if a user has a specific permission (system or tenant level)
+   */
+  function hasPermission<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    permission: string,
+    tenantId: string | null
+  ): boolean {
+    // Check system permissions first
+    const systemRoles = getSystemRoles(user)
+    for (const role of systemRoles) {
+      const permissions = resolvedSystemPermissions[role]
+      if (permissions?.includes(permission)) {
+        return true
+      }
+    }
+
+    // Check tenant permissions if tenant context provided
+    if (tenantId) {
+      const tenantRoles = getTenantRoles<TTenantRole>(user, tenantId)
+      for (const role of tenantRoles) {
+        const permissions = resolvedTenantPermissions[role]
+        if (permissions?.includes(permission)) {
+          return true
+        }
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Check if a user has any of the specified permissions
+   */
+  function hasAnyPermission<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    permissions: string[],
+    tenantId: string | null
+  ): boolean {
+    return permissions.some((permission) => hasPermission(user, permission, tenantId))
+  }
+
+  /**
+   * Check if a user has all of the specified permissions
+   */
+  function hasAllPermissions<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    permissions: string[],
+    tenantId: string | null
+  ): boolean {
+    return permissions.every((permission) => hasPermission(user, permission, tenantId))
+  }
+
+  /**
+   * Get all roles for a user (system + tenant)
+   */
+  function getRoles<TUser extends TenantUser<TSystemRole, TTenantRole>>(
+    user: TUser,
+    tenantId: string | null
+  ): { system: TSystemRole[]; tenant: TTenantRole[] } {
+    return {
+      system: getSystemRoles(user),
+      tenant: tenantId ? getTenantRoles<TTenantRole>(user, tenantId) : [],
+    }
+  }
+
+  return {
+    getSystemRoles,
+    getSystemPermissions,
+    getTenantRoles: <TUser extends TenantUser<TSystemRole, TTenantRole>>(
+      user: TUser,
+      tenantId: string
+    ) => getTenantRoles<TTenantRole>(user, tenantId),
+    getTenantPermissions,
+    getPermissions,
+    hasPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    getRoles,
+    getResolvedSystemPermissions: () => ({ ...resolvedSystemPermissions }),
+    getResolvedTenantPermissions: () => ({ ...resolvedTenantPermissions }),
   }
 }

@@ -5,12 +5,14 @@ export { createNextAuth } from './nextjs'
 // Types
 export type {
   BaseUser,
+  TenantUser,
   RoleDefinition,
   RolePermissions,
   PolicyMethod,
   Policy,
   PolicyMap,
   AuthConfig,
+  TenantConfig,
   AuthorizeOptions,
   PermissionCheckResult,
   AuditLogEntry,
@@ -32,7 +34,9 @@ export {
 // Utilities
 export {
   createPermissionChecker,
+  createTenantPermissionChecker,
   resolvePermissions,
+  getTenantRoles,
   CircularInheritanceError,
 } from './permissions'
 export { createPolicyCache, PolicyCache } from './cache'

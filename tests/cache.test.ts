@@ -35,13 +35,17 @@ describe('PolicyCache', () => {
       const cache = new PolicyCache()
 
       const key1 = cache.generateKey('view', 'User', 'user-123')
-      expect(key1).toBe('view:User:user-123:no-resource')
+      expect(key1).toBe('view:User:user-123:no-resource:no-tenant')
 
       const key2 = cache.generateKey('update', 'Post', 'user-456', { id: 'post-789' })
-      expect(key2).toBe('update:Post:user-456:post-789')
+      expect(key2).toBe('update:Post:user-456:post-789:no-tenant')
 
       const key3 = cache.generateKey('delete', 'Comment', 'user-789', { id: 123 })
-      expect(key3).toBe('delete:Comment:user-789:123')
+      expect(key3).toBe('delete:Comment:user-789:123:no-tenant')
+
+      // With tenant ID
+      const key4 = cache.generateKey('view', 'User', 'user-123', undefined, 'tenant-1')
+      expect(key4).toBe('view:User:user-123:no-resource:tenant-1')
     })
 
     it('should use custom getResourceKey function', () => {
@@ -55,7 +59,7 @@ describe('PolicyCache', () => {
       })
 
       const key = cache.generateKey('view', 'User', 'user-123', { uuid: 'custom-uuid' })
-      expect(key).toBe('view:User:user-123:custom-uuid')
+      expect(key).toBe('view:User:user-123:custom-uuid:no-tenant')
     })
   })
 

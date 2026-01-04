@@ -6,12 +6,17 @@ A flexible, framework-agnostic authorization library with policy-based access co
 
 - **Policy-based authorization** - Define granular access rules per resource type
 - **Role-permission mapping** - Simple role to permissions configuration
+- **Permission inheritance** - Define role hierarchies with automatic permission inheritance
+- **Multiple roles** - Users can have multiple roles with merged permissions
+- **Multi-tenancy** - Different roles per organization/tenant with tenant-scoped permissions
 - **Context-aware checks** - Pass resources for dynamic authorization decisions
 - **Framework-agnostic** - Works with any Node.js application
 - **React hooks** - `useAuth`, `usePermission`, `<Can>` components for React apps
 - **Next.js integration** - Built-in helpers for Next.js applications
+- **Caching** - LRU cache with TTL for policy check results
+- **Audit logging** - Track all authorization decisions
 - **TypeScript-first** - Full type safety and IntelliSense support
-- **Lightweight** - Zero dependencies, ~5KB minified
+- **Lightweight** - Zero dependencies
 
 ## Installation
 
@@ -911,6 +916,175 @@ const permissions = auth.getPermissions(user)
 auth.hasPermission(user, 'view.invoice')
 auth.hasAnyPermission(user, ['view.invoice', 'create.post'])
 auth.hasAllPermissions(user, ['view.dashboard', 'view.invoice'])
+```
+
+## Multi-Tenancy
+
+Support for SaaS applications where users have different roles in different organizations/tenants.
+
+### User Type with Tenant Roles
+
+```typescript
+import type { TenantUser } from '@alfredaoo/auth-policies'
+
+// Define system-wide and tenant-specific roles
+type SystemRole = 'SUPER_ADMIN' | 'USER'
+type TenantRole = 'OWNER' | 'ADMIN' | 'MEMBER'
+
+interface User extends TenantUser<SystemRole, TenantRole> {
+  id: string
+  email: string
+  role: SystemRole                                    // System-wide role
+  tenantRoles?: Record<string, TenantRole>            // Per-tenant roles
+}
+
+// Example user with different roles in different businesses
+const user: User = {
+  id: '1',
+  email: 'user@example.com',
+  role: 'USER',
+  tenantRoles: {
+    'business-1': 'OWNER',    // Owner of business-1
+    'business-2': 'MEMBER',   // Member of business-2
+  },
+}
+```
+
+### Configure Multi-Tenancy
+
+```typescript
+const auth = createAuth<User, SystemRole, 'Appointment'>({
+  // System-level role permissions (apply globally)
+  rolePermissions: {
+    SUPER_ADMIN: ['*'],
+    USER: ['view.profile'],
+  },
+  policies: {
+    Appointment: AppointmentPolicy,
+  },
+  getUser: async () => getCurrentUser(),
+
+  // Tenant configuration
+  tenant: {
+    // Tenant-level role permissions
+    rolePermissions: {
+      OWNER: ['manage.business', 'view.reports', 'manage.staff'],
+      ADMIN: ['view.reports', 'manage.staff'],
+      MEMBER: ['view.appointments'],
+    },
+    // How to get the current tenant context (e.g., from active business)
+    getTenantId: async () => {
+      const session = await getSession()
+      return session?.activeBusinessId ?? null
+    },
+  },
+})
+```
+
+### Tenant-Aware Policies
+
+```typescript
+import { getTenantRoles } from '@alfredaoo/auth-policies'
+
+const AppointmentPolicy = {
+  view: (user, resource, tenantId) => {
+    // SUPER_ADMIN can view all
+    if (user.role === 'SUPER_ADMIN') return true
+
+    // Check tenant role
+    if (!tenantId) return false
+    const tenantRoles = getTenantRoles(user, tenantId)
+    return tenantRoles.length > 0
+  },
+
+  manage: (user, resource, tenantId) => {
+    if (user.role === 'SUPER_ADMIN') return true
+    if (!tenantId) return false
+
+    const tenantRoles = getTenantRoles(user, tenantId)
+    return tenantRoles.includes('OWNER') || tenantRoles.includes('ADMIN')
+  },
+}
+```
+
+### Using Tenant Context
+
+```typescript
+// Uses tenant from config (getTenantId)
+await auth.canApi('view', 'Appointment')
+
+// Override tenant for specific check
+await auth.canApi('view', 'Appointment', { tenantId: 'business-2' })
+
+// In middleware, extract tenant from request
+export const PUT = withAuth(handler, {
+  action: 'manage',
+  type: 'Appointment',
+  getTenantId: (req) => {
+    const url = new URL(req.url)
+    return url.searchParams.get('businessId')
+  },
+})
+```
+
+### Tenant Permission Checker
+
+```typescript
+import { createTenantPermissionChecker } from '@alfredaoo/auth-policies'
+
+const checker = createTenantPermissionChecker({
+  systemRolePermissions: {
+    SUPER_ADMIN: ['*'],
+    USER: ['view.profile'],
+  },
+  tenantRolePermissions: {
+    OWNER: ['manage.business', 'view.reports'],
+    MEMBER: ['view.appointments'],
+  },
+})
+
+// Check combined permissions (system + tenant)
+checker.hasPermission(user, 'manage.business', 'business-1')  // true (OWNER)
+checker.hasPermission(user, 'manage.business', 'business-2')  // false (MEMBER)
+checker.hasPermission(user, 'view.profile', null)             // true (USER)
+
+// Get all permissions in a tenant context
+checker.getPermissions(user, 'business-1')
+// ['view.profile', 'manage.business', 'view.reports']
+
+// Get roles breakdown
+checker.getRoles(user, 'business-1')
+// { system: ['USER'], tenant: ['OWNER'] }
+```
+
+### Tenant Utilities on Auth Instance
+
+```typescript
+// Access tenant utilities
+auth.tenant?.getTenantRoles(user, 'business-1')    // ['OWNER']
+auth.tenant?.hasPermission(user, 'manage.business', 'business-1')
+auth.tenant?.getPermissions(user, 'business-1')
+
+// Check if multi-tenancy is enabled
+auth.config.tenantEnabled  // true
+```
+
+### Cache Invalidation by Tenant
+
+```typescript
+// Invalidate cache for a specific tenant (e.g., after role changes)
+auth.cache?.invalidateTenant('business-1')
+```
+
+### Audit Logging with Tenant
+
+```typescript
+const auth = createAuth({
+  // ...
+  onAudit: (entry) => {
+    console.log('Tenant:', entry.tenantId)  // The tenant context used
+  },
+})
 ```
 
 ## TypeScript
