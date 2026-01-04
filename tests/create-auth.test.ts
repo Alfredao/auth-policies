@@ -429,3 +429,298 @@ describe('error message formatting', () => {
     }
   })
 })
+
+describe('audit logging', () => {
+  it('should call onAudit callback on successful checkPermission', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: ['view.post'] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'Post')
+
+    expect(mockAudit).toHaveBeenCalledTimes(1)
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'view',
+        resourceType: 'Post',
+        allowed: true,
+        user: { id: '1', role: 'ADMIN' },
+        timestamp: expect.any(Date),
+        duration: expect.any(Number),
+      })
+    )
+  })
+
+  it('should call onAudit callback on denied checkPermission', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'USER' })
+
+    const auth = createAuth({
+      rolePermissions: { USER: [] },
+      policies: {
+        Post: {
+          delete: async () => false,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('delete', 'Post')
+
+    expect(mockAudit).toHaveBeenCalledTimes(1)
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'delete',
+        resourceType: 'Post',
+        allowed: false,
+        reason: 'policy_denied',
+        user: { id: '1', role: 'USER' },
+      })
+    )
+  })
+
+  it('should call onAudit callback on unauthenticated checkPermission', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue(null)
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'Post')
+
+    expect(mockAudit).toHaveBeenCalledTimes(1)
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'view',
+        resourceType: 'Post',
+        allowed: false,
+        reason: 'unauthenticated',
+        user: null,
+      })
+    )
+  })
+
+  it('should call onAudit callback on successful canApi', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: ['delete.post'] },
+      policies: {
+        Post: {
+          delete: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.canApi('delete', 'Post')
+
+    expect(mockAudit).toHaveBeenCalledTimes(1)
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'delete',
+        resourceType: 'Post',
+        allowed: true,
+      })
+    )
+  })
+
+  it('should call onAudit callback on denied canApi before throwing', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'USER' })
+
+    const auth = createAuth({
+      rolePermissions: { USER: [] },
+      policies: {
+        Post: {
+          delete: async () => false,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await expect(auth.canApi('delete', 'Post')).rejects.toThrow(UnauthorizedException)
+
+    expect(mockAudit).toHaveBeenCalledTimes(1)
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowed: false,
+        reason: 'policy_denied',
+      })
+    )
+  })
+
+  it('should include resource in audit entry', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+    const testResource = { id: '123', title: 'Test Post' }
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'Post', { resource: testResource })
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: testResource,
+      })
+    )
+  })
+
+  it('should include metadata in audit entry', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+    const testMetadata = { ip: '192.168.1.1', userAgent: 'Test Browser' }
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'Post', { metadata: testMetadata })
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: testMetadata,
+      })
+    )
+  })
+
+  it('should include duration in audit entry', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => {
+            // Simulate slow policy check
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            return true
+          },
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'Post')
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        duration: expect.any(Number),
+      })
+    )
+    expect(mockAudit.mock.calls[0][0].duration).toBeGreaterThanOrEqual(10)
+  })
+
+  it('should not break authorization if audit callback throws', async () => {
+    const mockAudit = vi.fn().mockRejectedValue(new Error('Audit failed'))
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    const result = await auth.checkPermission('view', 'Post')
+
+    expect(result).toBe(true)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[auth-policies] Audit logger error:',
+      expect.any(Error)
+    )
+
+    consoleSpy.mockRestore()
+  })
+
+  it('should call onAudit for policy_not_found', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {},
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('view', 'NonExistent' as any)
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowed: false,
+        reason: 'policy_not_found',
+      })
+    )
+  })
+
+  it('should call onAudit for action_not_found', async () => {
+    const mockAudit = vi.fn()
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'ADMIN' })
+
+    const auth = createAuth({
+      rolePermissions: { ADMIN: [] },
+      policies: {
+        Post: {
+          view: async () => true,
+        },
+      },
+      getUser: mockGetUser,
+      onAudit: mockAudit,
+    })
+
+    await auth.checkPermission('nonexistent' as any, 'Post')
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowed: false,
+        reason: 'action_not_found',
+      })
+    )
+  })
+})

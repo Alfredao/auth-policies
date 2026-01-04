@@ -483,6 +483,117 @@ app.put('/posts/:id',
 )
 ```
 
+## Audit Logging
+
+Track all authorization decisions for security monitoring and compliance:
+
+```typescript
+import { createAuth, type AuditLogEntry } from '@alfredaoo/auth-policies'
+
+const auth = createAuth({
+  rolePermissions,
+  policies,
+  getUser,
+  onAudit: async (entry: AuditLogEntry) => {
+    // Log to your preferred logging system
+    await logger.info('Authorization check', {
+      timestamp: entry.timestamp,
+      userId: entry.user?.id,
+      role: entry.user?.role,
+      action: entry.action,
+      resourceType: entry.resourceType,
+      allowed: entry.allowed,
+      reason: entry.reason,
+      duration: entry.duration,
+      metadata: entry.metadata,
+    })
+  },
+})
+```
+
+### Audit Entry Structure
+
+```typescript
+interface AuditLogEntry {
+  timestamp: Date           // When the check occurred
+  user: User | null         // The user (null if unauthenticated)
+  action: string            // The action being performed
+  resourceType: string      // The resource type
+  allowed: boolean          // Whether access was granted
+  reason?: string           // Denial reason: 'unauthenticated' | 'policy_denied' | 'policy_not_found' | 'action_not_found'
+  resource?: unknown        // The resource being accessed
+  duration: number          // Policy check duration in ms
+  metadata?: Record<string, unknown>  // Custom metadata
+}
+```
+
+### Adding Metadata
+
+Pass additional context for audit logs:
+
+```typescript
+// Include request metadata
+await auth.canApi('delete', 'Post', {
+  resource: post,
+  metadata: {
+    ip: request.ip,
+    userAgent: request.headers['user-agent'],
+    requestId: request.id,
+  },
+})
+```
+
+### Integration Examples
+
+**Winston:**
+```typescript
+import winston from 'winston'
+
+const logger = winston.createLogger({ /* ... */ })
+
+const auth = createAuth({
+  // ...
+  onAudit: (entry) => {
+    logger.info('auth', entry)
+  },
+})
+```
+
+**Pino:**
+```typescript
+import pino from 'pino'
+
+const logger = pino()
+
+const auth = createAuth({
+  // ...
+  onAudit: (entry) => {
+    logger.info(entry, 'authorization check')
+  },
+})
+```
+
+**Database:**
+```typescript
+const auth = createAuth({
+  // ...
+  onAudit: async (entry) => {
+    await prisma.auditLog.create({
+      data: {
+        timestamp: entry.timestamp,
+        userId: entry.user?.id,
+        action: entry.action,
+        resourceType: entry.resourceType,
+        allowed: entry.allowed,
+        reason: entry.reason,
+        duration: entry.duration,
+        metadata: entry.metadata,
+      },
+    })
+  },
+})
+```
+
 ## Context-Aware Policies
 
 Policies can receive the resource being accessed for dynamic authorization:

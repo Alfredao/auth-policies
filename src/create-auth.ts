@@ -1,4 +1,4 @@
-import type { AuthConfig, AuthorizeOptions, BaseUser } from './types'
+import type { AuthConfig, AuthorizeOptions, BaseUser, AuditLogEntry } from './types'
 import {
   UnauthorizedException,
   UnauthenticatedException,
@@ -41,7 +41,7 @@ export function createAuth<
   TRole extends string = string,
   TResourceType extends string = string
 >(config: AuthConfig<TUser, TRole, TResourceType>) {
-  const { rolePermissions, policies, getUser, handlers, debug = false } = config
+  const { rolePermissions, policies, getUser, handlers, debug = false, onAudit } = config
 
   // Create permission utilities
   const permissionChecker = createPermissionChecker<TUser, TRole>(rolePermissions)
@@ -52,6 +52,25 @@ export function createAuth<
   function debugLog(message: string, data?: Record<string, unknown>): void {
     if (debug) {
       console.log(`[auth-policies] ${message}`, data ?? '')
+    }
+  }
+
+  /**
+   * Audit logger - calls the onAudit callback if provided
+   */
+  async function audit(
+    entry: Omit<AuditLogEntry<TUser, TResourceType>, 'timestamp'>
+  ): Promise<void> {
+    if (onAudit) {
+      try {
+        await onAudit({
+          ...entry,
+          timestamp: new Date(),
+        })
+      } catch (error) {
+        // Don't let audit errors break the authorization flow
+        console.error('[auth-policies] Audit logger error:', error)
+      }
     }
   }
 
@@ -75,12 +94,23 @@ export function createAuth<
   async function checkPermission(
     action: string,
     type: TResourceType,
-    options?: AuthorizeOptions
+    options?: AuthorizeOptions & { metadata?: Record<string, unknown> }
   ): Promise<boolean> {
+    const startTime = Date.now()
     const user = await getUser()
 
     if (!user) {
       debugLog('checkPermission denied: No authenticated user', { action, type })
+      await audit({
+        user: null,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'unauthenticated',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       return false
     }
 
@@ -91,6 +121,16 @@ export function createAuth<
         `[auth-policies] No policy found for resource type: ${type}. ` +
           `Available types: ${Object.keys(policies).join(', ') || 'none'}`
       )
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'policy_not_found',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       return false
     }
 
@@ -101,6 +141,16 @@ export function createAuth<
         `[auth-policies] No policy method '${action}' on ${type}. ` +
           `Available actions: ${Object.keys(policy).join(', ') || 'none'}`
       )
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'action_not_found',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       return false
     }
 
@@ -113,6 +163,16 @@ export function createAuth<
         role: user.role,
         allowed: result,
       })
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: result,
+        reason: result ? undefined : 'policy_denied',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       return result
     } catch (error) {
       console.error(
@@ -124,6 +184,19 @@ export function createAuth<
         type,
         error: error instanceof Error ? error.message : String(error),
       })
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'policy_denied',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: {
+          ...options?.metadata,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
       return false
     }
   }
@@ -134,13 +207,24 @@ export function createAuth<
   async function authorize(
     action: string,
     type: TResourceType,
-    options: AuthorizeOptions | undefined,
+    options: (AuthorizeOptions & { metadata?: Record<string, unknown> }) | undefined,
     onUnauthorized: (error: UnauthorizedException) => never
   ): Promise<true> {
+    const startTime = Date.now()
     const user = await getUser()
 
     if (!user) {
       debugLog('authorize failed: No authenticated user', { action, type })
+      await audit({
+        user: null,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'unauthenticated',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       throw new UnauthenticatedException(
         'You must be logged in to perform this action'
       )
@@ -151,6 +235,16 @@ export function createAuth<
       const availableTypes = Object.keys(policies).join(', ') || 'none'
       const message = `Policy not found for resource type '${type}'. Available types: ${availableTypes}`
       debugLog('authorize failed: Policy not found', { action, type, availableTypes })
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'policy_not_found',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       throw new PolicyConfigurationException(message, AuthErrorCode.POLICY_NOT_FOUND, {
         action,
         resourceType: type,
@@ -163,6 +257,16 @@ export function createAuth<
       const availableActions = Object.keys(policy).join(', ') || 'none'
       const message = `Action '${action}' not found on ${type}. Available actions: ${availableActions}`
       debugLog('authorize failed: Action not found', { action, type, availableActions })
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'action_not_found',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
+      })
       throw new PolicyConfigurationException(message, AuthErrorCode.ACTION_NOT_FOUND, {
         action,
         resourceType: type,
@@ -179,6 +283,17 @@ export function createAuth<
         type,
         userId: user.id,
         role: user.role,
+      })
+
+      await audit({
+        user,
+        action,
+        resourceType: type,
+        allowed: false,
+        reason: 'policy_denied',
+        resource: options?.resource,
+        duration: Date.now() - startTime,
+        metadata: options?.metadata,
       })
 
       const error = new UnauthorizedException(message, AuthErrorCode.POLICY_DENIED, {
@@ -198,6 +313,16 @@ export function createAuth<
       role: user.role,
     })
 
+    await audit({
+      user,
+      action,
+      resourceType: type,
+      allowed: true,
+      resource: options?.resource,
+      duration: Date.now() - startTime,
+      metadata: options?.metadata,
+    })
+
     return true
   }
 
@@ -209,12 +334,18 @@ export function createAuth<
    * ```typescript
    * // In a server component
    * await auth.can('viewAll', 'User')
+   *
+   * // With metadata for audit logging
+   * await auth.can('delete', 'Post', {
+   *   resource: post,
+   *   metadata: { ip: request.ip, userAgent: request.headers['user-agent'] }
+   * })
    * ```
    */
   async function can(
     action: string,
     type: TResourceType,
-    options?: AuthorizeOptions
+    options?: AuthorizeOptions & { metadata?: Record<string, unknown> }
   ): Promise<true> {
     return authorize(action, type, options, (error) => {
       if (handlers?.onUnauthorizedRedirect) {
@@ -233,12 +364,18 @@ export function createAuth<
    * ```typescript
    * // In an API route
    * await auth.canApi('update', 'User', { resource: existingUser })
+   *
+   * // With metadata for audit logging
+   * await auth.canApi('delete', 'Post', {
+   *   resource: post,
+   *   metadata: { ip: request.ip }
+   * })
    * ```
    */
   async function canApi(
     action: string,
     type: TResourceType,
-    options?: AuthorizeOptions
+    options?: AuthorizeOptions & { metadata?: Record<string, unknown> }
   ): Promise<true> {
     return authorize(action, type, options, (error) => {
       if (handlers?.onUnauthorizedThrow) {

@@ -78,6 +78,22 @@ export interface AuthConfig<
    * @default false
    */
   debug?: boolean
+
+  /**
+   * Audit logger callback - called on every authorization check
+   * Use this to log authorization decisions to your logging system
+   *
+   * @example
+   * ```typescript
+   * const auth = createAuth({
+   *   // ...
+   *   onAudit: async (entry) => {
+   *     await logger.info('Authorization check', entry)
+   *   },
+   * })
+   * ```
+   */
+  onAudit?: AuditLogger<TUser, TResourceType>
 }
 
 /**
@@ -102,3 +118,64 @@ export interface PermissionCheckResult {
   allowed: boolean
   reason?: string
 }
+
+/**
+ * Audit log entry for authorization checks
+ */
+export interface AuditLogEntry<
+  TUser extends BaseUser = BaseUser,
+  TResourceType extends string = string
+> {
+  /**
+   * Timestamp of the authorization check
+   */
+  timestamp: Date
+
+  /**
+   * The user who made the request (null if unauthenticated)
+   */
+  user: TUser | null
+
+  /**
+   * The action being performed
+   */
+  action: string
+
+  /**
+   * The resource type being accessed
+   */
+  resourceType: TResourceType
+
+  /**
+   * Whether the action was allowed
+   */
+  allowed: boolean
+
+  /**
+   * The reason for denial (if applicable)
+   */
+  reason?: 'unauthenticated' | 'policy_denied' | 'policy_not_found' | 'action_not_found'
+
+  /**
+   * The resource being accessed (if provided)
+   */
+  resource?: unknown
+
+  /**
+   * Duration of the policy check in milliseconds
+   */
+  duration: number
+
+  /**
+   * Additional metadata
+   */
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Callback function for audit logging
+ */
+export type AuditLogger<
+  TUser extends BaseUser = BaseUser,
+  TResourceType extends string = string
+> = (entry: AuditLogEntry<TUser, TResourceType>) => void | Promise<void>

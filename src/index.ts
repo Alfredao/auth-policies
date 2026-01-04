@@ -11,6 +11,8 @@ export type {
   AuthConfig,
   AuthorizeOptions,
   PermissionCheckResult,
+  AuditLogEntry,
+  AuditLogger,
 } from './types'
 
 // Exceptions
