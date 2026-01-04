@@ -14,7 +14,15 @@ export type {
 } from './types'
 
 // Exceptions
-export { UnauthorizedException, UnauthenticatedException } from './exceptions'
+export {
+  UnauthorizedException,
+  UnauthenticatedException,
+  PolicyConfigurationException,
+  AuthErrorCode,
+  createErrorMessage,
+  type AuthErrorContext,
+  type AuthErrorCodeType,
+} from './exceptions'
 
 // Utilities
 export { createPermissionChecker } from './permissions'

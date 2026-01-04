@@ -1,5 +1,11 @@
 import type { AuthConfig, AuthorizeOptions, BaseUser } from './types'
-import { UnauthorizedException, UnauthenticatedException } from './exceptions'
+import {
+  UnauthorizedException,
+  UnauthenticatedException,
+  PolicyConfigurationException,
+  AuthErrorCode,
+  createErrorMessage,
+} from './exceptions'
 import { createPermissionChecker } from './permissions'
 
 /**
@@ -20,6 +26,7 @@ import { createPermissionChecker } from './permissions'
  *     const session = await getSession()
  *     return session?.user ?? null
  *   },
+ *   debug: process.env.NODE_ENV === 'development',
  * })
  *
  * // In API routes:
@@ -34,10 +41,19 @@ export function createAuth<
   TRole extends string = string,
   TResourceType extends string = string
 >(config: AuthConfig<TUser, TRole, TResourceType>) {
-  const { rolePermissions, policies, getUser, handlers } = config
+  const { rolePermissions, policies, getUser, handlers, debug = false } = config
 
   // Create permission utilities
   const permissionChecker = createPermissionChecker<TUser, TRole>(rolePermissions)
+
+  /**
+   * Debug logger - only logs when debug mode is enabled
+   */
+  function debugLog(message: string, data?: Record<string, unknown>): void {
+    if (debug) {
+      console.log(`[auth-policies] ${message}`, data ?? '')
+    }
+  }
 
   /**
    * Get the current user, throwing if not authenticated
@@ -45,8 +61,10 @@ export function createAuth<
   async function requireUser(): Promise<TUser> {
     const user = await getUser()
     if (!user) {
+      debugLog('requireUser failed: No authenticated user')
       throw new UnauthenticatedException()
     }
+    debugLog('requireUser success', { userId: user.id, role: user.role })
     return user
   }
 
@@ -60,24 +78,52 @@ export function createAuth<
     options?: AuthorizeOptions
   ): Promise<boolean> {
     const user = await getUser()
-    if (!user) return false
+
+    if (!user) {
+      debugLog('checkPermission denied: No authenticated user', { action, type })
+      return false
+    }
 
     const policy = policies[type]
     if (!policy) {
-      console.warn(`No policy found for resource type: ${type}`)
+      debugLog('checkPermission failed: Policy not found', { action, type })
+      console.warn(
+        `[auth-policies] No policy found for resource type: ${type}. ` +
+          `Available types: ${Object.keys(policies).join(', ') || 'none'}`
+      )
       return false
     }
 
     const policyMethod = policy[action]
     if (!policyMethod) {
-      console.warn(`No policy method found for action: ${action} on ${type}`)
+      debugLog('checkPermission failed: Action not found', { action, type })
+      console.warn(
+        `[auth-policies] No policy method '${action}' on ${type}. ` +
+          `Available actions: ${Object.keys(policy).join(', ') || 'none'}`
+      )
       return false
     }
 
     try {
-      return await policyMethod(user, options?.resource)
+      const result = await policyMethod(user, options?.resource)
+      debugLog('checkPermission result', {
+        action,
+        type,
+        userId: user.id,
+        role: user.role,
+        allowed: result,
+      })
+      return result
     } catch (error) {
-      console.error(`Policy check error for ${action} on ${type}:`, error)
+      console.error(
+        `[auth-policies] Policy check error for ${action} on ${type}:`,
+        error instanceof Error ? error.message : error
+      )
+      debugLog('checkPermission error', {
+        action,
+        type,
+        error: error instanceof Error ? error.message : String(error),
+      })
       return false
     }
   }
@@ -89,28 +135,68 @@ export function createAuth<
     action: string,
     type: TResourceType,
     options: AuthorizeOptions | undefined,
-    onUnauthorized: (message: string) => never
+    onUnauthorized: (error: UnauthorizedException) => never
   ): Promise<true> {
     const user = await getUser()
+
     if (!user) {
-      throw new UnauthenticatedException()
+      debugLog('authorize failed: No authenticated user', { action, type })
+      throw new UnauthenticatedException(
+        'You must be logged in to perform this action'
+      )
     }
 
     const policy = policies[type]
     if (!policy) {
-      throw new Error(`No policy found for resource type: ${type}`)
+      const availableTypes = Object.keys(policies).join(', ') || 'none'
+      const message = `Policy not found for resource type '${type}'. Available types: ${availableTypes}`
+      debugLog('authorize failed: Policy not found', { action, type, availableTypes })
+      throw new PolicyConfigurationException(message, AuthErrorCode.POLICY_NOT_FOUND, {
+        action,
+        resourceType: type,
+        details: { availableTypes: Object.keys(policies) },
+      })
     }
 
     const policyMethod = policy[action]
     if (!policyMethod) {
-      throw new Error(`No policy method found for action: ${action} on ${type}`)
+      const availableActions = Object.keys(policy).join(', ') || 'none'
+      const message = `Action '${action}' not found on ${type}. Available actions: ${availableActions}`
+      debugLog('authorize failed: Action not found', { action, type, availableActions })
+      throw new PolicyConfigurationException(message, AuthErrorCode.ACTION_NOT_FOUND, {
+        action,
+        resourceType: type,
+        details: { availableActions: Object.keys(policy) },
+      })
     }
 
     const allowed = await policyMethod(user, options?.resource)
+
     if (!allowed) {
-      const message = options?.message || 'You do not have permission to perform this action'
-      onUnauthorized(message)
+      const message = options?.message || createErrorMessage(action, type, user.role)
+      debugLog('authorize denied', {
+        action,
+        type,
+        userId: user.id,
+        role: user.role,
+      })
+
+      const error = new UnauthorizedException(message, AuthErrorCode.POLICY_DENIED, {
+        action,
+        resourceType: type,
+        role: user.role,
+        userId: user.id,
+      })
+
+      onUnauthorized(error)
     }
+
+    debugLog('authorize success', {
+      action,
+      type,
+      userId: user.id,
+      role: user.role,
+    })
 
     return true
   }
@@ -130,12 +216,12 @@ export function createAuth<
     type: TResourceType,
     options?: AuthorizeOptions
   ): Promise<true> {
-    return authorize(action, type, options, (message) => {
+    return authorize(action, type, options, (error) => {
       if (handlers?.onUnauthorizedRedirect) {
-        handlers.onUnauthorizedRedirect(message)
+        handlers.onUnauthorizedRedirect(error.message)
       }
       // Fallback: throw if no redirect handler
-      throw new UnauthorizedException(message)
+      throw error
     })
   }
 
@@ -154,11 +240,11 @@ export function createAuth<
     type: TResourceType,
     options?: AuthorizeOptions
   ): Promise<true> {
-    return authorize(action, type, options, (message) => {
+    return authorize(action, type, options, (error) => {
       if (handlers?.onUnauthorizedThrow) {
-        handlers.onUnauthorizedThrow(message)
+        handlers.onUnauthorizedThrow(error.message)
       }
-      throw new UnauthorizedException(message)
+      throw error
     })
   }
 
@@ -188,6 +274,7 @@ export function createAuth<
     config: {
       rolePermissions,
       policies,
+      debug,
     },
   }
 }

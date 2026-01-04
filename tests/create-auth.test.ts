@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createAuth } from '../src/create-auth'
-import { UnauthorizedException, UnauthenticatedException } from '../src/exceptions'
+import {
+  UnauthorizedException,
+  UnauthenticatedException,
+  PolicyConfigurationException,
+  AuthErrorCode,
+} from '../src/exceptions'
 import type { BaseUser, Policy } from '../src/types'
 
 // Test types
@@ -56,7 +61,7 @@ describe('createAuth', () => {
     mockGetUser = vi.fn()
   })
 
-  const createTestAuth = (user: TestUser | null = adminUser) => {
+  const createTestAuth = (user: TestUser | null = adminUser, debug = false) => {
     mockGetUser.mockResolvedValue(user)
 
     return createAuth<TestUser, TestRole, TestResource>({
@@ -66,6 +71,7 @@ describe('createAuth', () => {
         Comment: CommentPolicy,
       },
       getUser: mockGetUser,
+      debug,
     })
   }
 
@@ -124,10 +130,21 @@ describe('createAuth', () => {
       expect(result).toBe(true)
     })
 
-    it('should throw UnauthorizedException when not authorized', async () => {
+    it('should throw UnauthorizedException with context when not authorized', async () => {
       const auth = createTestAuth(regularUser)
 
-      await expect(auth.canApi('delete', 'Post')).rejects.toThrow(UnauthorizedException)
+      try {
+        await auth.canApi('delete', 'Post')
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnauthorizedException)
+        const authError = error as UnauthorizedException
+        expect(authError.code).toBe(AuthErrorCode.POLICY_DENIED)
+        expect(authError.context?.action).toBe('delete')
+        expect(authError.context?.resourceType).toBe('Post')
+        expect(authError.context?.role).toBe('USER')
+        expect(authError.context?.userId).toBe('2')
+      }
     })
 
     it('should throw UnauthenticatedException when not authenticated', async () => {
@@ -136,20 +153,46 @@ describe('createAuth', () => {
       await expect(auth.canApi('view', 'Post')).rejects.toThrow(UnauthenticatedException)
     })
 
-    it('should throw error for non-existent policy', async () => {
+    it('should throw PolicyConfigurationException for non-existent policy', async () => {
       const auth = createTestAuth(adminUser)
 
-      await expect(auth.canApi('view', 'NonExistent' as TestResource)).rejects.toThrow(
-        'No policy found for resource type: NonExistent'
-      )
+      try {
+        await auth.canApi('view', 'NonExistent' as TestResource)
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(PolicyConfigurationException)
+        const configError = error as PolicyConfigurationException
+        expect(configError.code).toBe(AuthErrorCode.POLICY_NOT_FOUND)
+        expect(configError.message).toContain('NonExistent')
+        expect(configError.message).toContain('Available types:')
+      }
     })
 
-    it('should throw error for non-existent action', async () => {
+    it('should throw PolicyConfigurationException for non-existent action', async () => {
       const auth = createTestAuth(adminUser)
 
-      await expect(auth.canApi('nonexistent' as 'view', 'Post')).rejects.toThrow(
-        'No policy method found for action: nonexistent on Post'
-      )
+      try {
+        await auth.canApi('nonexistent' as 'view', 'Post')
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(PolicyConfigurationException)
+        const configError = error as PolicyConfigurationException
+        expect(configError.code).toBe(AuthErrorCode.ACTION_NOT_FOUND)
+        expect(configError.message).toContain('nonexistent')
+        expect(configError.message).toContain('Available actions:')
+      }
+    })
+
+    it('should include role in error message', async () => {
+      const auth = createTestAuth(regularUser)
+
+      try {
+        await auth.canApi('delete', 'Post')
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnauthorizedException)
+        expect((error as UnauthorizedException).message).toContain('USER')
+      }
     })
 
     it('should pass resource to policy', async () => {
@@ -275,6 +318,14 @@ describe('createAuth', () => {
       expect(auth.config.policies.Post).toBeDefined()
       expect(auth.config.policies.Comment).toBeDefined()
     })
+
+    it('should expose debug setting in config', () => {
+      const authNoDebug = createTestAuth(adminUser, false)
+      const authWithDebug = createTestAuth(adminUser, true)
+
+      expect(authNoDebug.config.debug).toBe(false)
+      expect(authWithDebug.config.debug).toBe(true)
+    })
   })
 
   describe('custom handlers', () => {
@@ -299,6 +350,34 @@ describe('createAuth', () => {
       expect(mockThrowHandler).toHaveBeenCalled()
     })
   })
+
+  describe('debug mode', () => {
+    it('should log when debug is enabled', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const auth = createTestAuth(adminUser, true)
+
+      await auth.checkPermission('view', 'Post')
+
+      expect(consoleSpy).toHaveBeenCalled()
+      expect(consoleSpy.mock.calls.some((call) => call[0].includes('[auth-policies]'))).toBe(true)
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should not log when debug is disabled', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const auth = createTestAuth(adminUser, false)
+
+      await auth.checkPermission('view', 'Post')
+
+      const authPoliciesLogs = consoleSpy.mock.calls.filter((call) =>
+        call[0]?.includes?.('[auth-policies]')
+      )
+      expect(authPoliciesLogs).toHaveLength(0)
+
+      consoleSpy.mockRestore()
+    })
+  })
 })
 
 describe('createAuth with async policies', () => {
@@ -321,5 +400,32 @@ describe('createAuth with async policies', () => {
 
     const result = await auth.checkPermission('view', 'Item')
     expect(result).toBe(true)
+  })
+})
+
+describe('error message formatting', () => {
+  it('should include action and resource type in unauthorized message', async () => {
+    const mockGetUser = vi.fn().mockResolvedValue({ id: '1', role: 'VIEWER' })
+
+    const policy: Policy<BaseUser<'VIEWER'>> = {
+      delete: async () => false,
+    }
+
+    const auth = createAuth({
+      rolePermissions: { VIEWER: [] },
+      policies: { Document: policy },
+      getUser: mockGetUser,
+    })
+
+    try {
+      await auth.canApi('delete', 'Document')
+      expect.fail('Should have thrown')
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnauthorizedException)
+      const authError = error as UnauthorizedException
+      expect(authError.message).toContain('delete')
+      expect(authError.message).toContain('Document')
+      expect(authError.message).toContain('VIEWER')
+    }
   })
 })

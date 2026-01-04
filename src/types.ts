@@ -71,6 +71,13 @@ export interface AuthConfig<
      */
     onUnauthorizedThrow?: (message: string) => never
   }
+
+  /**
+   * Enable debug mode for verbose logging
+   * When true, logs detailed authorization checks to console
+   * @default false
+   */
+  debug?: boolean
 }
 
 /**
