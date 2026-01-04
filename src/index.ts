@@ -13,6 +13,7 @@ export type {
   PermissionCheckResult,
   AuditLogEntry,
   AuditLogger,
+  CacheConfig,
 } from './types'
 
 // Exceptions
@@ -28,3 +29,4 @@ export {
 
 // Utilities
 export { createPermissionChecker } from './permissions'
+export { createPolicyCache, PolicyCache } from './cache'

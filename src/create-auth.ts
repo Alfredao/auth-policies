@@ -7,6 +7,7 @@ import {
   createErrorMessage,
 } from './exceptions'
 import { createPermissionChecker } from './permissions'
+import { PolicyCache } from './cache'
 
 /**
  * Create an authorization instance with the provided configuration
@@ -41,10 +42,13 @@ export function createAuth<
   TRole extends string = string,
   TResourceType extends string = string
 >(config: AuthConfig<TUser, TRole, TResourceType>) {
-  const { rolePermissions, policies, getUser, handlers, debug = false, onAudit } = config
+  const { rolePermissions, policies, getUser, handlers, debug = false, onAudit, cache: cacheConfig } = config
 
   // Create permission utilities
   const permissionChecker = createPermissionChecker<TUser, TRole>(rolePermissions)
+
+  // Create cache if enabled
+  const cache = cacheConfig?.enabled ? new PolicyCache(cacheConfig) : null
 
   /**
    * Debug logger - only logs when debug mode is enabled
@@ -155,7 +159,39 @@ export function createAuth<
     }
 
     try {
+      // Check cache first
+      const cacheKey = cache?.generateKey(action, type, user.id, options?.resource)
+      if (cache && cacheKey) {
+        const cachedResult = cache.get(cacheKey)
+        if (cachedResult !== undefined) {
+          debugLog('checkPermission cache hit', {
+            action,
+            type,
+            userId: user.id,
+            allowed: cachedResult,
+          })
+          await audit({
+            user,
+            action,
+            resourceType: type,
+            allowed: cachedResult,
+            reason: cachedResult ? undefined : 'policy_denied',
+            resource: options?.resource,
+            duration: Date.now() - startTime,
+            metadata: { ...options?.metadata, cached: true },
+          })
+          return cachedResult
+        }
+      }
+
       const result = await policyMethod(user, options?.resource)
+
+      // Cache the result
+      if (cache && cacheKey) {
+        cache.set(cacheKey, result)
+        debugLog('checkPermission cache set', { cacheKey, result })
+      }
+
       debugLog('checkPermission result', {
         action,
         type,
@@ -274,7 +310,30 @@ export function createAuth<
       })
     }
 
-    const allowed = await policyMethod(user, options?.resource)
+    // Check cache first
+    const cacheKey = cache?.generateKey(action, type, user.id, options?.resource)
+    let allowed: boolean
+    let fromCache = false
+
+    if (cache && cacheKey) {
+      const cachedResult = cache.get(cacheKey)
+      if (cachedResult !== undefined) {
+        debugLog('authorize cache hit', {
+          action,
+          type,
+          userId: user.id,
+          allowed: cachedResult,
+        })
+        allowed = cachedResult
+        fromCache = true
+      } else {
+        allowed = await policyMethod(user, options?.resource)
+        cache.set(cacheKey, allowed)
+        debugLog('authorize cache set', { cacheKey, allowed })
+      }
+    } else {
+      allowed = await policyMethod(user, options?.resource)
+    }
 
     if (!allowed) {
       const message = options?.message || createErrorMessage(action, type, user.role)
@@ -293,7 +352,7 @@ export function createAuth<
         reason: 'policy_denied',
         resource: options?.resource,
         duration: Date.now() - startTime,
-        metadata: options?.metadata,
+        metadata: { ...options?.metadata, cached: fromCache },
       })
 
       const error = new UnauthorizedException(message, AuthErrorCode.POLICY_DENIED, {
@@ -320,7 +379,7 @@ export function createAuth<
       allowed: true,
       resource: options?.resource,
       duration: Date.now() - startTime,
-      metadata: options?.metadata,
+      metadata: { ...options?.metadata, cached: fromCache },
     })
 
     return true
@@ -407,11 +466,49 @@ export function createAuth<
     // Access to the permission checker for advanced use cases
     permissionChecker,
 
+    // Cache utilities (only available when caching is enabled)
+    cache: cache
+      ? {
+          /**
+           * Invalidate all cached entries for a specific user
+           */
+          invalidateUser: (userId: string) => cache.invalidateUser(userId),
+
+          /**
+           * Invalidate all cached entries for a specific resource type
+           */
+          invalidateResourceType: (resourceType: string) =>
+            cache.invalidateResourceType(resourceType),
+
+          /**
+           * Invalidate all cached entries for a specific resource
+           */
+          invalidateResource: (resourceType: string, resourceId: string) =>
+            cache.invalidateResource(resourceType, resourceId),
+
+          /**
+           * Clear all cached entries
+           */
+          clear: () => cache.clear(),
+
+          /**
+           * Get cache statistics
+           */
+          stats: () => cache.stats(),
+
+          /**
+           * Clean up expired entries (call periodically in long-running processes)
+           */
+          cleanup: () => cache.cleanup(),
+        }
+      : null,
+
     // Access to config for debugging/testing
     config: {
       rolePermissions,
       policies,
       debug,
+      cacheEnabled: !!cache,
     },
   }
 }

@@ -594,6 +594,128 @@ const auth = createAuth({
 })
 ```
 
+## Caching
+
+Enable caching to memoize policy check results and improve performance:
+
+```typescript
+const auth = createAuth({
+  rolePermissions,
+  policies,
+  getUser,
+  cache: {
+    enabled: true,
+    ttl: 60000, // 1 minute (default)
+    maxSize: 1000, // Max entries (default)
+  },
+})
+```
+
+### Cache Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Enable or disable caching |
+| `ttl` | `number` | `60000` | Time-to-live in milliseconds. Set to 0 for no expiration |
+| `maxSize` | `number` | `1000` | Maximum cache entries. Uses LRU eviction when exceeded |
+| `getResourceKey` | `function` | Uses `resource.id` | Custom function to generate cache key for resources |
+
+### Cache Keys
+
+Cache keys are generated from: `action:resourceType:userId:resourceId`
+
+```typescript
+// Without resource: "view:Post:user-123:no-resource"
+await auth.can('view', 'Post')
+
+// With resource: "update:Post:user-123:post-456"
+await auth.can('update', 'Post', { resource: { id: 'post-456' } })
+```
+
+### Custom Resource Key
+
+For resources without an `id` property, provide a custom key generator:
+
+```typescript
+const auth = createAuth({
+  // ...
+  cache: {
+    enabled: true,
+    getResourceKey: (resource) => {
+      if (resource && typeof resource === 'object' && 'uuid' in resource) {
+        return String(resource.uuid)
+      }
+      return undefined
+    },
+  },
+})
+```
+
+### Cache Invalidation
+
+Invalidate cached entries when permissions or resources change:
+
+```typescript
+// Invalidate all entries for a user (e.g., after role change)
+auth.cache?.invalidateUser('user-123')
+
+// Invalidate all entries for a resource type
+auth.cache?.invalidateResourceType('Post')
+
+// Invalidate entries for a specific resource
+auth.cache?.invalidateResource('Post', 'post-456')
+
+// Clear entire cache
+auth.cache?.clear()
+```
+
+### Cache Maintenance
+
+For long-running processes, periodically clean up expired entries:
+
+```typescript
+// Clean up expired entries
+const removed = auth.cache?.cleanup()
+console.log(`Removed ${removed} expired entries`)
+
+// Get cache statistics
+const stats = auth.cache?.stats()
+console.log(`Cache size: ${stats?.size}/${stats?.maxSize}`)
+```
+
+### Audit Logging with Cache
+
+When caching is enabled, audit entries include a `cached` flag in metadata:
+
+```typescript
+const auth = createAuth({
+  // ...
+  cache: { enabled: true },
+  onAudit: (entry) => {
+    if (entry.metadata?.cached) {
+      console.log('Result from cache')
+    }
+  },
+})
+```
+
+### Standalone Cache
+
+Use the cache independently for custom scenarios:
+
+```typescript
+import { createPolicyCache } from '@alfredaoo/auth-policies'
+
+const cache = createPolicyCache({
+  ttl: 30000,
+  maxSize: 500,
+})
+
+const key = cache.generateKey('view', 'Post', 'user-123', { id: 'post-1' })
+cache.set(key, true)
+const result = cache.get(key) // true
+```
+
 ## Context-Aware Policies
 
 Policies can receive the resource being accessed for dynamic authorization:

@@ -7,6 +7,37 @@ export interface BaseUser<TRole extends string = string> {
 }
 
 /**
+ * Cache configuration options for memoizing policy results
+ */
+export interface CacheConfig {
+  /**
+   * Enable or disable caching
+   * @default false
+   */
+  enabled?: boolean
+
+  /**
+   * Time-to-live in milliseconds
+   * Set to 0 for no expiration (not recommended for long-running processes)
+   * @default 60000 (1 minute)
+   */
+  ttl?: number
+
+  /**
+   * Maximum number of entries in the cache
+   * Uses LRU eviction when exceeded
+   * @default 1000
+   */
+  maxSize?: number
+
+  /**
+   * Custom function to generate a cache key for a resource
+   * By default, uses resource.id if available
+   */
+  getResourceKey?: (resource: unknown) => string | undefined
+}
+
+/**
  * Policy method signature - takes the user and optionally a resource
  */
 export type PolicyMethod<TUser extends BaseUser = BaseUser> = (
@@ -94,6 +125,24 @@ export interface AuthConfig<
    * ```
    */
   onAudit?: AuditLogger<TUser, TResourceType>
+
+  /**
+   * Cache configuration for memoizing policy results
+   * When enabled, policy check results are cached to improve performance
+   *
+   * @example
+   * ```typescript
+   * const auth = createAuth({
+   *   // ...
+   *   cache: {
+   *     enabled: true,
+   *     ttl: 30000, // 30 seconds
+   *     maxSize: 500,
+   *   },
+   * })
+   * ```
+   */
+  cache?: CacheConfig
 }
 
 /**
