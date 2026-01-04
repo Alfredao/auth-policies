@@ -8,6 +8,7 @@ A flexible, framework-agnostic authorization library with policy-based access co
 - **Role-permission mapping** - Simple role to permissions configuration
 - **Context-aware checks** - Pass resources for dynamic authorization decisions
 - **Framework-agnostic** - Works with any Node.js application
+- **React hooks** - `useAuth`, `usePermission`, `<Can>` components for React apps
 - **Next.js integration** - Built-in helpers for Next.js applications
 - **TypeScript-first** - Full type safety and IntelliSense support
 - **Lightweight** - Zero dependencies, ~5KB minified
@@ -212,6 +213,156 @@ function handleApiError(error: unknown) {
     return new Response(error.message, { status: 401 })
   }
   // ... handle other errors
+}
+```
+
+## React Hooks
+
+The library provides React hooks and components for client-side authorization.
+
+### Setup
+
+Wrap your app with `AuthProvider`:
+
+```tsx
+// app/providers.tsx
+'use client'
+
+import { AuthProvider } from '@alfredaoo/auth-policies/react'
+import { auth } from '@/lib/authorization'
+
+export function Providers({ children, user }: { children: React.ReactNode; user: User | null }) {
+  return (
+    <AuthProvider auth={auth} initialUser={user}>
+      {children}
+    </AuthProvider>
+  )
+}
+```
+
+### useAuth
+
+Access the full auth context:
+
+```tsx
+import { useAuth } from '@alfredaoo/auth-policies/react'
+
+function UserMenu() {
+  const { user, isLoading, isAuthenticated, refresh } = useAuth()
+
+  if (isLoading) return <Spinner />
+  if (!isAuthenticated) return <LoginButton />
+
+  return <div>Welcome, {user.name}</div>
+}
+```
+
+### useUser
+
+Simplified hook for user data:
+
+```tsx
+import { useUser } from '@alfredaoo/auth-policies/react'
+
+function Profile() {
+  const { user, isAuthenticated } = useUser()
+
+  if (!isAuthenticated) return <LoginPrompt />
+  return <div>{user.email}</div>
+}
+```
+
+### usePermission
+
+Check a single permission reactively:
+
+```tsx
+import { usePermission } from '@alfredaoo/auth-policies/react'
+
+function DeleteButton({ postId }: { postId: string }) {
+  const { allowed, isLoading } = usePermission('delete', 'Post')
+
+  if (isLoading) return <button disabled>...</button>
+  if (!allowed) return null
+
+  return <button onClick={() => deletePost(postId)}>Delete</button>
+}
+```
+
+### usePermissions
+
+Check multiple permissions at once:
+
+```tsx
+import { usePermissions } from '@alfredaoo/auth-policies/react'
+
+function AdminPanel() {
+  const { permissions, isLoading } = usePermissions([
+    { action: 'create', resourceType: 'User' },
+    { action: 'delete', resourceType: 'User' },
+  ])
+
+  if (isLoading) return <Spinner />
+
+  return (
+    <div>
+      {permissions['create:User'] && <CreateUserButton />}
+      {permissions['delete:User'] && <DeleteUserButton />}
+    </div>
+  )
+}
+```
+
+### Can Component
+
+Declarative conditional rendering:
+
+```tsx
+import { Can } from '@alfredaoo/auth-policies/react'
+
+function PostActions({ post }: { post: Post }) {
+  return (
+    <div>
+      {/* Basic usage */}
+      <Can action="delete" resourceType="Post">
+        <DeleteButton postId={post.id} />
+      </Can>
+
+      {/* With fallback */}
+      <Can action="update" resourceType="Post" fallback={<span>Read only</span>}>
+        <EditButton postId={post.id} />
+      </Can>
+
+      {/* With loading state */}
+      <Can action="delete" resourceType="Post" loading={<Spinner />}>
+        <DeleteButton postId={post.id} />
+      </Can>
+
+      {/* Context-aware check */}
+      <Can action="update" resourceType="Post" resource={post}>
+        <EditButton postId={post.id} />
+      </Can>
+    </div>
+  )
+}
+```
+
+### Cannot Component
+
+Render content when permission is denied:
+
+```tsx
+import { Cannot } from '@alfredaoo/auth-policies/react'
+
+function PostView({ post }: { post: Post }) {
+  return (
+    <div>
+      <h1>{post.title}</h1>
+      <Cannot action="update" resourceType="Post">
+        <p className="text-gray-500">You don't have permission to edit this post.</p>
+      </Cannot>
+    </div>
+  )
 }
 ```
 
