@@ -1,4 +1,4 @@
-# @alfredao/auth-policies
+# @alfredaoo/auth-policies
 
 A flexible, framework-agnostic authorization library with policy-based access control (RBAC).
 
@@ -15,11 +15,11 @@ A flexible, framework-agnostic authorization library with policy-based access co
 ## Installation
 
 ```bash
-npm install @alfredao/auth-policies
+npm install @alfredaoo/auth-policies
 # or
-pnpm add @alfredao/auth-policies
+pnpm add @alfredaoo/auth-policies
 # or
-yarn add @alfredao/auth-policies
+yarn add @alfredaoo/auth-policies
 ```
 
 ## Quick Start
@@ -201,7 +201,7 @@ const auth = createNextAuth({
 ### Exceptions
 
 ```typescript
-import { UnauthorizedException, UnauthenticatedException } from '@alfredao/auth-policies'
+import { UnauthorizedException, UnauthenticatedException } from '@alfredaoo/auth-policies'
 
 // In your API error handler
 function handleApiError(error: unknown) {
@@ -243,7 +243,7 @@ await canApi('delete', 'Instance', { resource: instance })
 If you only need permission checking without the full policy system:
 
 ```typescript
-import { createPermissionChecker } from '@alfredao/auth-policies'
+import { createPermissionChecker } from '@alfredaoo/auth-policies'
 
 const { hasPermission, hasAnyPermission } = createPermissionChecker(rolePermissions)
 
@@ -257,7 +257,7 @@ if (hasPermission(user, 'create.user')) {
 The library is written in TypeScript and provides full type safety:
 
 ```typescript
-import type { BaseUser, Policy, PolicyMap, AuthConfig } from '@alfredao/auth-policies'
+import type { BaseUser, Policy, PolicyMap, AuthConfig } from '@alfredaoo/auth-policies'
 
 // Your user type must extend BaseUser
 interface MyUser extends BaseUser<'ADMIN' | 'USER'> {
